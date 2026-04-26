@@ -13,7 +13,7 @@ MOCO-Display provides the LVGL-based touchscreen UI for the motion control syste
 ## Hardware
 
 - **MCU**: ESP32-S3 with 8MB PSRAM
-- **Display**: RM690B0 2.1" AMOLED (480×536)
+- **Board**: [Waveshare ESP32-S3-Touch-AMOLED-2.41](https://a.co/d/02X1OVXf) — 2.41" AMOLED (600×450), 16MB Flash, 8MB PSRAM
 - **Interface**: I2C for touch, SPI for display
 
 ## Build & Flash

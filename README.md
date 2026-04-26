@@ -1,10 +1,10 @@
-# MOCO-Display
+# MOCO-display
 
 ESP32-S3 IDF-based firmware for the MOCO jib crane main control panel display.
 
 ## Overview
 
-MOCO-Display provides the LVGL-based touchscreen UI for the motion control system, allowing operators to:
+MOCO-display provides the LVGL-based touchscreen UI for the motion control system, allowing operators to:
 - Configure camera motion parameters (pan, tilt, swing, lift, focus)
 - Set timelapse interval and shooting duration
 - Adjust motor speed and acceleration
@@ -51,7 +51,7 @@ Hardware-specific settings in `WaveshareBoardConfig.h`:
 ## Project Structure
 
 ```
-ESP32-S3/
+MOCO-display/
 ├── main/                      # IDF component entry point
 │   ├── main.c                # Settings UI and controller loops
 │   ├── CMakeLists.txt

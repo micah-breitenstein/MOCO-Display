@@ -239,7 +239,10 @@ static lv_obj_t *settings_exit_btn = NULL;
 static lv_obj_t *settings_exit_lbl = NULL;
 static lv_obj_t *reset_defaults_lbl = NULL;
 static lv_obj_t *editor_title_label = NULL;
+static lv_obj_t *editor_value_left_bracket_label = NULL;
 static lv_obj_t *editor_value_label = NULL;
+static lv_obj_t *editor_value_right_bracket_label = NULL;
+static lv_obj_t *editor_value_accel_label = NULL;
 static bool status_error_active = false;
 static bool mode_message_active = false;
 static uint64_t mode_message_until_ms = 0;
@@ -588,6 +591,7 @@ static void settings_exit_cb(lv_event_t *e);
 static void reset_defaults_cb(lv_event_t *e);
 static void open_settings_menu(void);
 static int get_setting_acceleration_multiplier(void);
+static void set_bg_gradient_all_states(lv_obj_t *obj, lv_color_t start, lv_color_t end);
 static void clear_confirm_dialog_state(void);
 static void update_confirm_dialog_controller_highlight(void);
 static bool confirm_primary_selected;
@@ -601,12 +605,12 @@ static void (*confirm_secondary_action)(lv_event_t *);
 static void controller_clear_footer_highlight(void)
 {
     if (settings_exit_btn && settings_exit_lbl) {
-        lv_obj_set_style_bg_color(settings_exit_btn, lv_color_make(20, 20, 20), 0);
-        lv_obj_set_style_text_color(settings_exit_lbl, lv_color_make(200, 120, 40), 0);
+        set_bg_gradient_all_states(settings_exit_btn, lv_color_make(90, 45, 8), lv_color_make(170, 80, 0));
+        lv_obj_set_style_text_color(settings_exit_lbl, lv_color_make(255, 235, 205), 0);
     }
     if (reset_defaults_btn && reset_defaults_lbl) {
-        lv_obj_set_style_bg_color(reset_defaults_btn, lv_color_make(20, 20, 20), 0);
-        lv_obj_set_style_text_color(reset_defaults_lbl, lv_color_make(180, 50, 50), 0);
+        set_bg_gradient_all_states(reset_defaults_btn, lv_color_make(95, 20, 20), lv_color_make(170, 40, 40));
+        lv_obj_set_style_text_color(reset_defaults_lbl, lv_color_make(255, 235, 235), 0);
     }
 }
 
@@ -631,7 +635,7 @@ static void controller_highlight_row(int idx)
     if (idx == NAV_FOOTER_CLOSE_IDX && settings_exit_btn && settings_exit_lbl) {
         selected_row = NULL;
         controller_nav_index = idx;
-        lv_obj_set_style_bg_color(settings_exit_btn, lv_color_make(155, 60, 0), 0);
+        set_bg_gradient_all_states(settings_exit_btn, lv_color_make(155, 60, 0), lv_color_make(230, 120, 10));
         lv_obj_set_style_text_color(settings_exit_lbl, lv_color_black(), 0);
         lv_obj_scroll_to_view(settings_exit_btn, LV_ANIM_ON);
         return;
@@ -640,7 +644,7 @@ static void controller_highlight_row(int idx)
     if (idx == NAV_FOOTER_RESET_IDX && reset_defaults_btn && reset_defaults_lbl) {
         selected_row = NULL;
         controller_nav_index = idx;
-        lv_obj_set_style_bg_color(reset_defaults_btn, lv_color_make(160, 35, 35), 0);
+        set_bg_gradient_all_states(reset_defaults_btn, lv_color_make(160, 35, 35), lv_color_make(220, 70, 70));
         lv_obj_set_style_text_color(reset_defaults_lbl, lv_color_black(), 0);
         lv_obj_scroll_to_view(reset_defaults_btn, LV_ANIM_ON);
         return;
@@ -855,6 +859,29 @@ static void format_setting_value(SettingId id, char *buf, size_t sz)
     }
 }
 
+static size_t editor_value_field_width(SettingId id)
+{
+    const SettingDef *s = &settings[id];
+    if (s->type == STYPE_ACTION) {
+        return strlen("RUN");
+    }
+
+    if (s->type == STYPE_BOOL) {
+        if (id == SETTING_LOGO_THEME) {
+            return strlen("LIGHT");
+        }
+        return strlen("OFF");
+    }
+
+    char min_buf[24];
+    char max_buf[24];
+    snprintf(min_buf, sizeof(min_buf), "%d%s", s->min_val, s->unit);
+    snprintf(max_buf, sizeof(max_buf), "%d%s", s->max_val, s->unit);
+    size_t min_len = strlen(min_buf);
+    size_t max_len = strlen(max_buf);
+    return (min_len > max_len) ? min_len : max_len;
+}
+
 static void recompute_recently_changed_flags(void)
 {
     for (int i = 0; i < SETTING_COUNT; i++) {
@@ -885,15 +912,24 @@ static void editor_value_pop(void)
 static void update_editor_value_label(void)
 {
     if (!editor_value_label) return;
-    char val[16], buf[32];
+    char val[16];
     format_setting_value(editor_setting_id, val, sizeof(val));
     int accel = get_setting_acceleration_multiplier();
-    if (accel > 1) {
-        snprintf(buf, sizeof(buf), "[%s]x%d", val, accel);
-    } else {
-        snprintf(buf, sizeof(buf), "[%s]", val);
+
+    lv_label_set_text(editor_value_label, val);
+    if (editor_value_left_bracket_label) {
+        lv_label_set_text(editor_value_left_bracket_label, "[");
     }
-    lv_label_set_text(editor_value_label, buf);
+    if (editor_value_right_bracket_label) {
+        lv_label_set_text(editor_value_right_bracket_label, "]");
+    }
+    if (editor_value_accel_label) {
+        if (accel > 1) {
+            lv_label_set_text(editor_value_accel_label, "x10");
+        } else {
+            lv_label_set_text(editor_value_accel_label, "");
+        }
+    }
 }
 
 /* Calculate acceleration multiplier based on hold duration (touch or controller) */
@@ -1010,6 +1046,9 @@ typedef struct {
     lv_color_t idle_text;
     lv_color_t idle_bg;
     lv_color_t press_bg;
+    bool use_gradient;
+    lv_color_t idle_grad;
+    lv_color_t press_grad;
 } btn_press_ctx_t;
 static void outline_btn_press_cb(lv_event_t *e);
 static bool point_in_obj(lv_obj_t *obj, lv_point_t *p);
@@ -1122,7 +1161,7 @@ static void editor_done_cb(lv_event_t *e)
     lv_obj_t *save_lbl = create_label_no_theme(save_btn);
     lv_label_set_text(save_lbl, "SAVE");
     lv_obj_set_style_text_font(save_lbl, &lv_font_montserrat_28, 0);
-    lv_obj_set_style_text_color(save_lbl, lv_color_make(200, 120, 40), 0);
+    lv_obj_set_style_text_color(save_lbl, lv_color_make(255, 235, 205), 0);
     lv_obj_center(save_lbl);
 
     /* CANCEL button — gray outline, visual-only */
@@ -1140,7 +1179,7 @@ static void editor_done_cb(lv_event_t *e)
     /* Set up press visual contexts */
     save_press_ctx.lbl = save_lbl;
     save_press_ctx.btn = save_btn;
-    save_press_ctx.idle_text = lv_color_make(200, 120, 40);
+    save_press_ctx.idle_text = lv_color_make(255, 235, 205);
     save_press_ctx.idle_bg = lv_color_make(20, 20, 20);
     save_press_ctx.press_bg = lv_color_make(155, 60, 0);
     cancel_press_ctx.lbl = exit_lbl;
@@ -1234,6 +1273,18 @@ static void set_border_all_states(lv_obj_t *obj, lv_color_t color, lv_coord_t w)
     }
 }
 
+static void set_bg_gradient_all_states(lv_obj_t *obj, lv_color_t start, lv_color_t end)
+{
+    static const lv_state_t sts[] = {0, LV_STATE_PRESSED,
+        LV_STATE_FOCUSED, LV_STATE_FOCUSED | LV_STATE_PRESSED,
+        LV_STATE_CHECKED, LV_STATE_EDITED};
+    for (int i = 0; i < (int)(sizeof(sts)/sizeof(sts[0])); i++) {
+        lv_obj_set_style_bg_color(obj, start, sts[i]);
+        lv_obj_set_style_bg_grad_color(obj, end, sts[i]);
+        lv_obj_set_style_bg_grad_dir(obj, LV_GRAD_DIR_HOR, sts[i]);
+    }
+}
+
 static void create_editor_panel(void)
 {
     if (settings_editor_panel) return;
@@ -1256,18 +1307,37 @@ static void create_editor_panel(void)
     lv_obj_set_width(editor_title_label, LCD_H_RES - 40);
     lv_obj_set_pos(editor_title_label, 20, 30);
 
+    editor_value_left_bracket_label = create_label_no_theme(settings_editor_panel);
+    lv_obj_set_style_text_color(editor_value_left_bracket_label, lv_color_make(255, 180, 80), 0);
+    lv_obj_set_style_text_font(editor_value_left_bracket_label, &lv_font_montserrat_120, 0);
+    lv_label_set_text(editor_value_left_bracket_label, "[");
+    lv_obj_set_pos(editor_value_left_bracket_label, 138, 160);
+
     editor_value_label = create_label_no_theme(settings_editor_panel);
     lv_obj_set_style_text_color(editor_value_label, lv_color_make(255, 180, 80), 0);
     lv_obj_set_style_text_font(editor_value_label, &lv_font_montserrat_120, 0);
     lv_obj_set_style_text_align(editor_value_label, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(editor_value_label, LV_LABEL_LONG_CLIP);
-    lv_obj_set_width(editor_value_label, LCD_H_RES - 40);
-    lv_obj_set_pos(editor_value_label, 20, 160);
+    lv_obj_set_width(editor_value_label, 300);
+    lv_obj_set_pos(editor_value_label, 160, 160);
+
+    editor_value_right_bracket_label = create_label_no_theme(settings_editor_panel);
+    lv_obj_set_style_text_color(editor_value_right_bracket_label, lv_color_make(255, 180, 80), 0);
+    lv_obj_set_style_text_font(editor_value_right_bracket_label, &lv_font_montserrat_120, 0);
+    lv_label_set_text(editor_value_right_bracket_label, "]");
+    lv_obj_set_pos(editor_value_right_bracket_label, 462, 160);
+
+    editor_value_accel_label = create_label_no_theme(settings_editor_panel);
+    lv_obj_set_style_text_color(editor_value_accel_label, lv_color_make(255, 235, 205), 0);
+    lv_obj_set_style_text_font(editor_value_accel_label, &lv_font_montserrat_48, 0);
+    lv_label_set_text(editor_value_accel_label, "");
+    lv_obj_set_pos(editor_value_accel_label, 500, 198);
 
     /* Minus button (right side due to display orientation) — gray outline, visual-only */
     lv_obj_t *dec_btn = make_plain_button(settings_editor_panel, 160, 80,
                                           lv_color_make(20, 20, 20), 12);
     set_border_all_states(dec_btn, lv_color_make(90, 90, 90), 2);
+    set_bg_gradient_all_states(dec_btn, lv_color_make(40, 40, 40), lv_color_make(80, 80, 80));
     lv_obj_set_pos(dec_btn, LCD_H_RES - 200, 320);
     lv_obj_clear_flag(dec_btn, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_t *dec_lbl = create_label_no_theme(dec_btn);
@@ -1278,25 +1348,32 @@ static void create_editor_panel(void)
     dec_press_ctx.lbl = dec_lbl;
     dec_press_ctx.btn = dec_btn;
     dec_press_ctx.idle_text = lv_color_white();
-    dec_press_ctx.idle_bg = lv_color_make(20, 20, 20);
+    dec_press_ctx.idle_bg = lv_color_make(40, 40, 40);
     dec_press_ctx.press_bg = lv_color_make(70, 70, 70);
+    dec_press_ctx.use_gradient = true;
+    dec_press_ctx.idle_grad = lv_color_make(80, 80, 80);
+    dec_press_ctx.press_grad = lv_color_make(120, 120, 120);
 
     /* Done button — Close theme (orange outline), stays clickable */
     lv_obj_t *done_btn = make_plain_button(settings_editor_panel, 160, 80,
                                            lv_color_make(20, 20, 20), 12);
     set_border_all_states(done_btn, lv_color_make(155, 60, 0), 2);
+    set_bg_gradient_all_states(done_btn, lv_color_make(90, 45, 8), lv_color_make(170, 80, 0));
     lv_obj_align(done_btn, LV_ALIGN_BOTTOM_MID, 0, -40);
     lv_obj_add_event_cb(done_btn, editor_done_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *done_lbl = create_label_no_theme(done_btn);
     lv_label_set_text(done_lbl, "DONE");
     lv_obj_set_style_text_font(done_lbl, &lv_font_montserrat_48, 0);
-    lv_obj_set_style_text_color(done_lbl, lv_color_make(200, 120, 40), 0);
+    lv_obj_set_style_text_color(done_lbl, lv_color_make(255, 235, 205), 0);
     lv_obj_center(done_lbl);
     done_press_ctx.lbl = done_lbl;
     done_press_ctx.btn = done_btn;
-    done_press_ctx.idle_text = lv_color_make(200, 120, 40);
-    done_press_ctx.idle_bg = lv_color_make(20, 20, 20);
+    done_press_ctx.idle_text = lv_color_make(255, 235, 205);
+    done_press_ctx.idle_bg = lv_color_make(90, 45, 8);
     done_press_ctx.press_bg = lv_color_make(155, 60, 0);
+    done_press_ctx.use_gradient = true;
+    done_press_ctx.idle_grad = lv_color_make(170, 80, 0);
+    done_press_ctx.press_grad = lv_color_make(230, 120, 10);
     lv_obj_add_event_cb(done_btn, outline_btn_press_cb, LV_EVENT_PRESSED, &done_press_ctx);
     lv_obj_add_event_cb(done_btn, outline_btn_press_cb, LV_EVENT_RELEASED, &done_press_ctx);
     lv_obj_add_event_cb(done_btn, outline_btn_press_cb, LV_EVENT_PRESS_LOST, &done_press_ctx);
@@ -1305,6 +1382,7 @@ static void create_editor_panel(void)
     lv_obj_t *inc_btn = make_plain_button(settings_editor_panel, 160, 80,
                                           lv_color_make(20, 20, 20), 12);
     set_border_all_states(inc_btn, lv_color_make(90, 90, 90), 2);
+    set_bg_gradient_all_states(inc_btn, lv_color_make(40, 40, 40), lv_color_make(80, 80, 80));
     lv_obj_set_pos(inc_btn, 40, 320);
     lv_obj_clear_flag(inc_btn, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_t *inc_lbl = create_label_no_theme(inc_btn);
@@ -1315,8 +1393,11 @@ static void create_editor_panel(void)
     inc_press_ctx.lbl = inc_lbl;
     inc_press_ctx.btn = inc_btn;
     inc_press_ctx.idle_text = lv_color_white();
-    inc_press_ctx.idle_bg = lv_color_make(20, 20, 20);
+    inc_press_ctx.idle_bg = lv_color_make(40, 40, 40);
     inc_press_ctx.press_bg = lv_color_make(70, 70, 70);
+    inc_press_ctx.use_gradient = true;
+    inc_press_ctx.idle_grad = lv_color_make(80, 80, 80);
+    inc_press_ctx.press_grad = lv_color_make(120, 120, 120);
 
     /* Panel-level slideable touch for +/- with auto-repeat (X-mirror aware) */
     editor_pm_pair.btn_a = dec_btn;
@@ -1484,9 +1565,17 @@ static void highlight_btn(btn_press_ctx_t *ctx, bool pressed)
         LV_STATE_FOCUSED, LV_STATE_FOCUSED | LV_STATE_PRESSED,
         LV_STATE_CHECKED, LV_STATE_EDITED};
     lv_color_t bg = pressed ? ctx->press_bg : ctx->idle_bg;
+    lv_color_t grad = pressed ? ctx->press_grad : ctx->idle_grad;
     lv_color_t txt = pressed ? lv_color_black() : ctx->idle_text;
-    for (int i = 0; i < (int)(sizeof(sts)/sizeof(sts[0])); i++)
+    for (int i = 0; i < (int)(sizeof(sts)/sizeof(sts[0])); i++) {
         lv_obj_set_style_bg_color(ctx->btn, bg, sts[i]);
+        if (ctx->use_gradient) {
+            lv_obj_set_style_bg_grad_color(ctx->btn, grad, sts[i]);
+            lv_obj_set_style_bg_grad_dir(ctx->btn, LV_GRAD_DIR_HOR, sts[i]);
+        } else {
+            lv_obj_set_style_bg_grad_dir(ctx->btn, LV_GRAD_DIR_NONE, sts[i]);
+        }
+    }
     lv_obj_set_style_text_color(ctx->lbl, txt, 0);
     lv_obj_invalidate(ctx->btn);
 }
@@ -1570,8 +1659,9 @@ static void reset_defaults_cb(lv_event_t *e)
     lv_obj_t *yes_lbl = create_label_no_theme(yes_btn);
     lv_label_set_text(yes_lbl, "YES");
     lv_obj_set_style_text_font(yes_lbl, &lv_font_montserrat_28, 0);
-    lv_obj_set_style_text_color(yes_lbl, lv_color_make(180, 50, 50), 0);
+    lv_obj_set_style_text_color(yes_lbl, lv_color_make(255, 235, 235), 0);
     lv_obj_center(yes_lbl);
+    set_bg_gradient_all_states(yes_btn, lv_color_make(95, 20, 20), lv_color_make(170, 40, 40));
 
     /* NO button — Close theme (orange outline), visual-only */
     lv_obj_t *no_btn = make_plain_button(settings_confirm_panel, 200, 70,
@@ -1582,20 +1672,27 @@ static void reset_defaults_cb(lv_event_t *e)
     lv_obj_t *no_lbl = create_label_no_theme(no_btn);
     lv_label_set_text(no_lbl, "NO");
     lv_obj_set_style_text_font(no_lbl, &lv_font_montserrat_28, 0);
-    lv_obj_set_style_text_color(no_lbl, lv_color_make(200, 120, 40), 0);
+    lv_obj_set_style_text_color(no_lbl, lv_color_make(255, 235, 205), 0);
     lv_obj_center(no_lbl);
+    set_bg_gradient_all_states(no_btn, lv_color_make(90, 45, 8), lv_color_make(170, 80, 0));
 
     /* Set up press visual contexts */
     yes_press_ctx.lbl = yes_lbl;
     yes_press_ctx.btn = yes_btn;
-    yes_press_ctx.idle_text = lv_color_make(180, 50, 50);
-    yes_press_ctx.idle_bg = lv_color_make(20, 20, 20);
+    yes_press_ctx.idle_text = lv_color_make(255, 235, 235);
+    yes_press_ctx.idle_bg = lv_color_make(95, 20, 20);
     yes_press_ctx.press_bg = lv_color_make(160, 35, 35);
+    yes_press_ctx.use_gradient = true;
+    yes_press_ctx.idle_grad = lv_color_make(170, 40, 40);
+    yes_press_ctx.press_grad = lv_color_make(220, 70, 70);
     close_press_ctx.lbl = no_lbl;
     close_press_ctx.btn = no_btn;
-    close_press_ctx.idle_text = lv_color_make(200, 120, 40);
-    close_press_ctx.idle_bg = lv_color_make(20, 20, 20);
+    close_press_ctx.idle_text = lv_color_make(255, 235, 205);
+    close_press_ctx.idle_bg = lv_color_make(90, 45, 8);
     close_press_ctx.press_bg = lv_color_make(155, 60, 0);
+    close_press_ctx.use_gradient = true;
+    close_press_ctx.idle_grad = lv_color_make(170, 80, 0);
+    close_press_ctx.press_grad = lv_color_make(230, 120, 10);
 
     /* Panel-level slideable touch: touch on no_btn area → user over visual YES,
        touch on yes_btn area → user over visual NO (X-mirror) */
@@ -1716,22 +1813,22 @@ static void create_settings_list(void)
                                             lv_color_make(20, 20, 20), 8);
     settings_exit_btn = exit_btn;
     set_border_all_states(exit_btn, lv_color_make(155, 60, 0), 2);
-    lv_obj_set_style_bg_color(exit_btn, lv_color_make(155, 60, 0), LV_STATE_PRESSED);
-    lv_obj_set_style_bg_opa(exit_btn, LV_OPA_COVER, LV_STATE_PRESSED);
-    lv_obj_set_style_bg_color(exit_btn, lv_color_make(155, 60, 0), LV_STATE_FOCUSED | LV_STATE_PRESSED);
-    lv_obj_set_style_bg_opa(exit_btn, LV_OPA_COVER, LV_STATE_FOCUSED | LV_STATE_PRESSED);
+    set_bg_gradient_all_states(exit_btn, lv_color_make(90, 45, 8), lv_color_make(170, 80, 0));
     lv_obj_add_event_cb(exit_btn, settings_exit_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *exit_lbl = create_label_no_theme(exit_btn);
     lv_label_set_text(exit_lbl, "Close");
     settings_exit_lbl = exit_lbl;
-    lv_obj_set_style_text_color(exit_lbl, lv_color_make(200, 120, 40), 0);
+    lv_obj_set_style_text_color(exit_lbl, lv_color_make(255, 235, 205), 0);
     lv_obj_set_style_text_font(exit_lbl, &lv_font_montserrat_40_limited, 0);
     lv_obj_align(exit_lbl, LV_ALIGN_CENTER, 0, 0);
     close_press_ctx.lbl = exit_lbl;
     close_press_ctx.btn = exit_btn;
-    close_press_ctx.idle_text = lv_color_make(200, 120, 40);
-    close_press_ctx.idle_bg = lv_color_make(20, 20, 20);
+    close_press_ctx.idle_text = lv_color_make(255, 235, 205);
+    close_press_ctx.idle_bg = lv_color_make(90, 45, 8);
     close_press_ctx.press_bg = lv_color_make(155, 60, 0);
+    close_press_ctx.use_gradient = true;
+    close_press_ctx.idle_grad = lv_color_make(170, 80, 0);
+    close_press_ctx.press_grad = lv_color_make(230, 120, 10);
     lv_obj_add_event_cb(exit_btn, outline_btn_press_cb, LV_EVENT_PRESSED, &close_press_ctx);
     lv_obj_add_event_cb(exit_btn, outline_btn_press_cb, LV_EVENT_RELEASED, &close_press_ctx);
     lv_obj_add_event_cb(exit_btn, outline_btn_press_cb, LV_EVENT_PRESS_LOST, &close_press_ctx);
@@ -1744,28 +1841,25 @@ static void create_settings_list(void)
                                              LCD_H_RES - 160, 64,
                                              lv_color_make(20, 20, 20), 8);
     set_border_all_states(reset_defaults_btn, lv_color_make(160, 40, 40), 2);
-    /* Pressed state: full red fill */
-    lv_obj_set_style_bg_color(reset_defaults_btn, lv_color_make(160, 35, 35), LV_STATE_PRESSED);
-    lv_obj_set_style_bg_opa(reset_defaults_btn, LV_OPA_COVER, LV_STATE_PRESSED);
-    lv_obj_set_style_bg_color(reset_defaults_btn, lv_color_make(160, 35, 35), LV_STATE_FOCUSED | LV_STATE_PRESSED);
-    lv_obj_set_style_bg_opa(reset_defaults_btn, LV_OPA_COVER, LV_STATE_FOCUSED | LV_STATE_PRESSED);
-    lv_obj_set_style_bg_color(reset_defaults_btn, lv_color_make(160, 35, 35), LV_STATE_CHECKED);
-    lv_obj_set_style_bg_opa(reset_defaults_btn, LV_OPA_COVER, LV_STATE_CHECKED);
+    set_bg_gradient_all_states(reset_defaults_btn, lv_color_make(95, 20, 20), lv_color_make(170, 40, 40));
     lv_obj_set_style_pad_left(reset_defaults_btn, 16, 0);
     lv_obj_set_style_pad_right(reset_defaults_btn, 16, 0);
     lv_obj_add_event_cb(reset_defaults_btn, reset_defaults_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *reset_lbl = create_label_no_theme(reset_defaults_btn);
     lv_label_set_text(reset_lbl, "Reset Defaults");
     reset_defaults_lbl = reset_lbl;
-    lv_obj_set_style_text_color(reset_lbl, lv_color_make(180, 50, 50), 0);
+    lv_obj_set_style_text_color(reset_lbl, lv_color_make(255, 235, 235), 0);
     lv_obj_set_style_text_font(reset_lbl, &lv_font_montserrat_40_limited, 0);
     lv_obj_align(reset_lbl, LV_ALIGN_CENTER, 0, 0);
     /* Press/release callbacks to toggle label color */
     reset_press_ctx.lbl = reset_lbl;
     reset_press_ctx.btn = reset_defaults_btn;
-    reset_press_ctx.idle_text = lv_color_make(180, 50, 50);
-    reset_press_ctx.idle_bg = lv_color_make(20, 20, 20);
+    reset_press_ctx.idle_text = lv_color_make(255, 235, 235);
+    reset_press_ctx.idle_bg = lv_color_make(95, 20, 20);
     reset_press_ctx.press_bg = lv_color_make(160, 35, 35);
+    reset_press_ctx.use_gradient = true;
+    reset_press_ctx.idle_grad = lv_color_make(170, 40, 40);
+    reset_press_ctx.press_grad = lv_color_make(220, 70, 70);
     lv_obj_add_event_cb(reset_defaults_btn, outline_btn_press_cb, LV_EVENT_PRESSED, &reset_press_ctx);
     lv_obj_add_event_cb(reset_defaults_btn, outline_btn_press_cb, LV_EVENT_RELEASED, &reset_press_ctx);
     lv_obj_add_event_cb(reset_defaults_btn, outline_btn_press_cb, LV_EVENT_PRESS_LOST, &reset_press_ctx);
@@ -2945,9 +3039,9 @@ static void status_uart_task(void *arg)
                         char status_buf[48];
                         snprintf(status_buf, sizeof(status_buf), "%d%% ETA %ds", percent, eta_sec);
                         set_flowlapse_status(true, status_buf);
-                    } else if (strstr(line, "recording stopped. Press SELECT again for preview") != NULL) {
+                    } else if (strstr(line, "recording stopped") != NULL) {
                         flowlapse_playback_active = false;
-                        set_flowlapse_status(true, "FLOWLAPSE READY");
+                        set_flowlapse_status(true, "REC STOPPED - PRESS SELECT");
                     } else if (strstr(line, "recording armed") != NULL) {
                         flowlapse_playback_active = false;
                         set_flowlapse_status(true, "FLOWLAPSE READY");
@@ -2958,6 +3052,12 @@ static void status_uart_task(void *arg)
                         flowlapse_waypoint_indicator_active = false;
                         set_flowlapse_waypoint_count(0, 0);
                         set_flowlapse_status(false, "FLOWLAPSE READY");
+                    } else if (strstr(line, "returning to waypoint 1") != NULL) {
+                        flowlapse_playback_active = true;
+                        set_flowlapse_status(true, "RETURNING TO WP 1");
+                    } else if (strstr(line, "return to waypoint 1 complete") != NULL) {
+                        flowlapse_playback_active = false;
+                        set_flowlapse_status(true, "AT WP 1 - PRESS START");
                     } else if (strstr(line, "preview started") != NULL) {
                         flowlapse_playback_active = true;
                         flowlapse_waypoint_indicator_active = true;

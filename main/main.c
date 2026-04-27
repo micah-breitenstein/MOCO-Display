@@ -1,6 +1,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <math.h>
 
 #include "driver/spi_master.h"
 #include "driver/uart.h"
@@ -179,6 +180,9 @@ static bool    touch_moved = false;
 
 /* Track if long press occurred for editor buttons (prevent double action on release) */
 static bool    editor_long_press_fired = false;
+static uint64_t editor_last_activity_ms = 0;
+
+#define EDITOR_ACCEL_CLEAR_IDLE_MS 1000
 
 /* Controller hold state (for dpad acceleration) */
 static int64_t controller_hold_start_us = 0;
@@ -220,12 +224,24 @@ static lv_obj_t *drone_right_ring = NULL;
 static lv_obj_t *drone_left_stick = NULL;
 static lv_obj_t *drone_right_stick = NULL;
 static lv_obj_t *drone_center_line = NULL;
+static lv_obj_t *drone_top_divider = NULL;
+static lv_obj_t *drone_precision_card = NULL;
+static lv_obj_t *drone_boost_card = NULL;
+static lv_obj_t *drone_camera_card = NULL;
+static lv_obj_t *drone_precision_icon = NULL;
+static lv_obj_t *drone_boost_icon = NULL;
+static lv_obj_t *drone_camera_icon = NULL;
 static lv_obj_t *drone_precision_label = NULL;
 static lv_obj_t *drone_boost_label = NULL;
 static lv_obj_t *drone_precision_state_box = NULL;
 static lv_obj_t *drone_boost_state_box = NULL;
 static lv_obj_t *drone_camera_label = NULL;
 static lv_obj_t *drone_camera_state_box = NULL;
+static lv_obj_t *drone_stick_controls_label = NULL;
+static lv_obj_t *drone_left_stick_label = NULL;
+static lv_obj_t *drone_left_axis_label = NULL;
+static lv_obj_t *drone_right_stick_label = NULL;
+static lv_obj_t *drone_right_axis_label = NULL;
 static lv_obj_t *drone_flowlapse_bar = NULL;
 static lv_obj_t *drone_flowlapse_fill = NULL;
 static lv_obj_t *drone_flowlapse_label = NULL;
@@ -282,12 +298,12 @@ static int flowlapse_waypoint_total = 0;
 static bool flowlapse_waypoint_indicator_active = false;
 static bool flowlapse_playback_active = false;
 
-#define DRONE_LEFT_STICK_BASE_X 145
-#define DRONE_LEFT_STICK_BASE_Y 301
-#define DRONE_RIGHT_STICK_BASE_X 435
-#define DRONE_RIGHT_STICK_BASE_Y 301
-#define DRONE_LIFT_INDICATOR_OFFSET 46
-#define DRONE_HORIZ_INDICATOR_OFFSET 46
+#define DRONE_LEFT_STICK_BASE_X 153
+#define DRONE_LEFT_STICK_BASE_Y 257
+#define DRONE_RIGHT_STICK_BASE_X 427
+#define DRONE_RIGHT_STICK_BASE_Y 257
+#define DRONE_LIFT_INDICATOR_OFFSET 60
+#define DRONE_HORIZ_INDICATOR_OFFSET 60
 
 #define FLOWLAPSE_BAR_NORMAL_X 60
 #define FLOWLAPSE_BAR_NORMAL_Y 144
@@ -925,6 +941,7 @@ static void update_editor_value_label(void)
     }
     if (editor_value_accel_label) {
         if (accel > 1) {
+            editor_last_activity_ms = esp_timer_get_time() / 1000ULL;
             lv_label_set_text(editor_value_accel_label, "x10");
         } else {
             lv_label_set_text(editor_value_accel_label, "");
@@ -988,6 +1005,7 @@ static int get_editor_step_delta(const SettingDef *s, bool increasing)
 static void editor_dec_cb(lv_event_t *e)
 {
     (void)e;
+    editor_last_activity_ms = esp_timer_get_time() / 1000ULL;
     SettingDef *s = &settings[editor_setting_id];
     if (s->type == STYPE_ACTION) {
         return;
@@ -1012,6 +1030,7 @@ static void editor_dec_cb(lv_event_t *e)
 static void editor_inc_cb(lv_event_t *e)
 {
     (void)e;
+    editor_last_activity_ms = esp_timer_get_time() / 1000ULL;
     SettingDef *s = &settings[editor_setting_id];
     if (s->type == STYPE_ACTION) {
         return;
@@ -1418,6 +1437,7 @@ static void create_editor_panel(void)
 static void open_editor(SettingId id)
 {
     editor_setting_id = id;
+    editor_last_activity_ms = esp_timer_get_time() / 1000ULL;
     editor_original_value = settings[id].value;
     editor_visible = true;
     if (editor_title_label) {
@@ -2122,8 +2142,29 @@ static void update_drone_lift_indicator(void)
         return;
     }
 
-    lv_coord_t x = DRONE_LEFT_STICK_BASE_X + (drone_swing_display_percent * DRONE_HORIZ_INDICATOR_OFFSET) / 100;
-    lv_coord_t y = DRONE_LEFT_STICK_BASE_Y - (drone_lift_display_percent * DRONE_LIFT_INDICATOR_OFFSET) / 100;
+    int swing_offset = (drone_swing_display_percent * DRONE_HORIZ_INDICATOR_OFFSET) / 100;
+    int lift_offset = (drone_lift_display_percent * DRONE_LIFT_INDICATOR_OFFSET) / 100;
+    if (drone_swing_display_percent != 0 && swing_offset == 0) {
+        swing_offset = (drone_swing_display_percent > 0) ? 6 : -6;
+    }
+    if (drone_lift_display_percent != 0 && lift_offset == 0) {
+        lift_offset = (drone_lift_display_percent > 0) ? 6 : -6;
+    }
+
+    // Constrain to circular movement within the ring
+    int radius_sq = DRONE_HORIZ_INDICATOR_OFFSET * DRONE_HORIZ_INDICATOR_OFFSET;
+    int mag_sq = swing_offset * swing_offset + lift_offset * lift_offset;
+    if (mag_sq > radius_sq) {
+        // Magnitude exceeds radius; normalize to circle
+        int mag = (int)sqrt((float)mag_sq);
+        if (mag > 0) {
+            swing_offset = (swing_offset * DRONE_HORIZ_INDICATOR_OFFSET) / mag;
+            lift_offset = (lift_offset * DRONE_LIFT_INDICATOR_OFFSET) / mag;
+        }
+    }
+
+    lv_coord_t x = DRONE_LEFT_STICK_BASE_X + swing_offset;
+    lv_coord_t y = DRONE_LEFT_STICK_BASE_Y - lift_offset;
 
     lv_obj_set_pos(drone_left_stick, x, y);
 }
@@ -2134,8 +2175,29 @@ static void update_drone_tilt_indicator(void)
         return;
     }
 
-    lv_coord_t x = DRONE_RIGHT_STICK_BASE_X + (drone_pan_display_percent * DRONE_HORIZ_INDICATOR_OFFSET) / 100;
-    lv_coord_t y = DRONE_RIGHT_STICK_BASE_Y - (drone_tilt_display_percent * DRONE_LIFT_INDICATOR_OFFSET) / 100;
+    int pan_offset = (drone_pan_display_percent * DRONE_HORIZ_INDICATOR_OFFSET) / 100;
+    int tilt_offset = (drone_tilt_display_percent * DRONE_LIFT_INDICATOR_OFFSET) / 100;
+    if (drone_pan_display_percent != 0 && pan_offset == 0) {
+        pan_offset = (drone_pan_display_percent > 0) ? 6 : -6;
+    }
+    if (drone_tilt_display_percent != 0 && tilt_offset == 0) {
+        tilt_offset = (drone_tilt_display_percent > 0) ? 6 : -6;
+    }
+
+    // Constrain to circular movement within the ring
+    int radius_sq = DRONE_HORIZ_INDICATOR_OFFSET * DRONE_HORIZ_INDICATOR_OFFSET;
+    int mag_sq = pan_offset * pan_offset + tilt_offset * tilt_offset;
+    if (mag_sq > radius_sq) {
+        // Magnitude exceeds radius; normalize to circle
+        int mag = (int)sqrt((float)mag_sq);
+        if (mag > 0) {
+            pan_offset = (pan_offset * DRONE_HORIZ_INDICATOR_OFFSET) / mag;
+            tilt_offset = (tilt_offset * DRONE_LIFT_INDICATOR_OFFSET) / mag;
+        }
+    }
+
+    lv_coord_t x = DRONE_RIGHT_STICK_BASE_X + pan_offset;
+    lv_coord_t y = DRONE_RIGHT_STICK_BASE_Y - tilt_offset;
 
     lv_obj_set_pos(drone_right_stick, x, y);
 }
@@ -2273,12 +2335,20 @@ static void set_flowlapse_status(bool active, const char *text)
     refresh_flowlapse_status_label();
 
     bool show = active && current_display_mode == DISPLAY_MODE_DRONE;
-    bool show_joystick_cluster = (current_display_mode == DISPLAY_MODE_DRONE) && !flowlapse_active;
-    bool show_modifiers = (current_display_mode == DISPLAY_MODE_DRONE) && !flowlapse_active;
+    bool show_joystick_cluster = (current_display_mode == DISPLAY_MODE_DRONE);
+    bool show_modifiers = (current_display_mode == DISPLAY_MODE_DRONE);
 
+    if (drone_precision_icon) {
+        show_modifiers ? lv_obj_clear_flag(drone_precision_icon, LV_OBJ_FLAG_HIDDEN)
+                       : lv_obj_add_flag(drone_precision_icon, LV_OBJ_FLAG_HIDDEN);
+    }
     if (drone_precision_label) {
         show_modifiers ? lv_obj_clear_flag(drone_precision_label, LV_OBJ_FLAG_HIDDEN)
                        : lv_obj_add_flag(drone_precision_label, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (drone_boost_icon) {
+        show_modifiers ? lv_obj_clear_flag(drone_boost_icon, LV_OBJ_FLAG_HIDDEN)
+                       : lv_obj_add_flag(drone_boost_icon, LV_OBJ_FLAG_HIDDEN);
     }
     if (drone_boost_label) {
         show_modifiers ? lv_obj_clear_flag(drone_boost_label, LV_OBJ_FLAG_HIDDEN)
@@ -2291,6 +2361,10 @@ static void set_flowlapse_status(bool active, const char *text)
     if (drone_boost_state_box) {
         show_modifiers ? lv_obj_clear_flag(drone_boost_state_box, LV_OBJ_FLAG_HIDDEN)
                        : lv_obj_add_flag(drone_boost_state_box, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (drone_camera_icon) {
+        show_modifiers ? lv_obj_clear_flag(drone_camera_icon, LV_OBJ_FLAG_HIDDEN)
+                       : lv_obj_add_flag(drone_camera_icon, LV_OBJ_FLAG_HIDDEN);
     }
     if (drone_camera_label) {
         show_modifiers ? lv_obj_clear_flag(drone_camera_label, LV_OBJ_FLAG_HIDDEN)
@@ -2320,6 +2394,42 @@ static void set_flowlapse_status(bool active, const char *text)
     if (drone_center_line) {
         show_joystick_cluster ? lv_obj_clear_flag(drone_center_line, LV_OBJ_FLAG_HIDDEN)
                               : lv_obj_add_flag(drone_center_line, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (drone_top_divider) {
+        show_modifiers ? lv_obj_clear_flag(drone_top_divider, LV_OBJ_FLAG_HIDDEN)
+                   : lv_obj_add_flag(drone_top_divider, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (drone_precision_card) {
+        show_modifiers ? lv_obj_clear_flag(drone_precision_card, LV_OBJ_FLAG_HIDDEN)
+                       : lv_obj_add_flag(drone_precision_card, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (drone_boost_card) {
+        show_modifiers ? lv_obj_clear_flag(drone_boost_card, LV_OBJ_FLAG_HIDDEN)
+                       : lv_obj_add_flag(drone_boost_card, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (drone_camera_card) {
+        show_modifiers ? lv_obj_clear_flag(drone_camera_card, LV_OBJ_FLAG_HIDDEN)
+                       : lv_obj_add_flag(drone_camera_card, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (drone_stick_controls_label) {
+        show_joystick_cluster ? lv_obj_clear_flag(drone_stick_controls_label, LV_OBJ_FLAG_HIDDEN)
+                              : lv_obj_add_flag(drone_stick_controls_label, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (drone_left_stick_label) {
+        show_joystick_cluster ? lv_obj_clear_flag(drone_left_stick_label, LV_OBJ_FLAG_HIDDEN)
+                              : lv_obj_add_flag(drone_left_stick_label, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (drone_left_axis_label) {
+        show_joystick_cluster ? lv_obj_clear_flag(drone_left_axis_label, LV_OBJ_FLAG_HIDDEN)
+                              : lv_obj_add_flag(drone_left_axis_label, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (drone_right_stick_label) {
+        show_joystick_cluster ? lv_obj_clear_flag(drone_right_stick_label, LV_OBJ_FLAG_HIDDEN)
+                              : lv_obj_add_flag(drone_right_stick_label, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (drone_right_axis_label) {
+        show_joystick_cluster ? lv_obj_clear_flag(drone_right_axis_label, LV_OBJ_FLAG_HIDDEN)
+                              : lv_obj_add_flag(drone_right_axis_label, LV_OBJ_FLAG_HIDDEN);
     }
 
     update_flowlapse_layout();
@@ -2383,13 +2493,19 @@ static void set_drone_modifier_indicator(bool precision_active, bool boost_activ
         lv_obj_set_style_bg_color(drone_boost_state_box,
                                   boost_active ? lv_color_make(160, 50, 255) : lv_color_make(120, 120, 120),
                                   LV_PART_MAIN);
+        lv_obj_invalidate(drone_boost_state_box);
     }
 
     if (drone_precision_label) {
         lv_obj_set_style_text_color(drone_precision_label, lv_color_white(), LV_PART_MAIN);
+        lv_obj_invalidate(drone_precision_label);
     }
     if (drone_boost_label) {
         lv_obj_set_style_text_color(drone_boost_label, lv_color_white(), LV_PART_MAIN);
+        lv_obj_invalidate(drone_boost_label);
+    }
+    if (drone_precision_state_box) {
+        lv_obj_invalidate(drone_precision_state_box);
     }
 }
 
@@ -2400,12 +2516,14 @@ static void set_drone_camera_indicator(bool active)
     if (drone_camera_label) {
         lv_label_set_text(drone_camera_label, "CAMERA");
         lv_obj_set_style_text_color(drone_camera_label, lv_color_white(), LV_PART_MAIN);
+        lv_obj_invalidate(drone_camera_label);
     }
 
     if (drone_camera_state_box) {
         lv_obj_set_style_bg_color(drone_camera_state_box,
                                   active ? lv_color_make(160, 50, 255) : lv_color_make(120, 120, 120),
                                   LV_PART_MAIN);
+        lv_obj_invalidate(drone_camera_state_box);
     }
 }
 
@@ -2469,8 +2587,8 @@ static const char *drone_vert_dir_to_text(int dir)
 
 static void set_drone_mode_visible(bool visible)
 {
-    bool show_joystick_cluster = visible && !flowlapse_active;
-    bool show_modifiers = visible && !flowlapse_active;
+    bool show_joystick_cluster = visible;
+    bool show_modifiers = visible;
 
     if (visible) {
         if (logo_img_obj) {
@@ -2541,6 +2659,14 @@ static void set_drone_mode_visible(bool visible)
     if (visible) {
         update_flowlapse_layout();
     }
+}
+
+static bool is_drone_controls_visible(void)
+{
+    if (drone_left_stick == NULL) {
+        return false;
+    }
+    return !lv_obj_has_flag(drone_left_stick, LV_OBJ_FLAG_HIDDEN);
 }
 
 static const char *display_mode_to_text(DisplayMode mode)
@@ -2660,6 +2786,19 @@ static void status_uart_task(void *arg)
 
     while (1) {
         uint64_t now_ms = esp_timer_get_time() / 1000ULL;
+
+        if (editor_visible && editor_value_accel_label
+            && editor_last_activity_ms > 0
+            && (now_ms - editor_last_activity_ms) >= EDITOR_ACCEL_CLEAR_IDLE_MS) {
+            if (xSemaphoreTake(lvgl_mux, pdMS_TO_TICKS(250)) == pdTRUE) {
+                if (editor_visible && editor_value_accel_label
+                    && lv_label_get_text(editor_value_accel_label)
+                    && lv_label_get_text(editor_value_accel_label)[0] != '\0') {
+                    lv_label_set_text(editor_value_accel_label, "");
+                }
+                xSemaphoreGive(lvgl_mux);
+            }
+        }
 
         if (drone_camera_indicator_active && now_ms >= drone_camera_indicator_until_ms) {
             if (xSemaphoreTake(lvgl_mux, pdMS_TO_TICKS(250)) == pdTRUE) {
@@ -2894,6 +3033,10 @@ static void status_uart_task(void *arg)
             } else if (strncmp(line, "TRIGGER:MANUAL_DRONE", 20) == 0) {
                 if (xSemaphoreTake(lvgl_mux, pdMS_TO_TICKS(250)) == pdTRUE) {
                     if (!emergency_stop_active) {
+                        if (current_display_mode != DISPLAY_MODE_DRONE) {
+                            switch_display_mode(DISPLAY_MODE_DRONE, NULL, now_ms);
+                        }
+                        set_drone_mode_visible(true);
                         trigger_drone_camera_indicator(now_ms);
                     }
                     xSemaphoreGive(lvgl_mux);
@@ -3002,6 +3145,10 @@ static void status_uart_task(void *arg)
                     char *modifier_ptr = strstr(line, "DRONE_MODIFIER:");
                     if (modifier_ptr != NULL
                         && sscanf(modifier_ptr, "DRONE_MODIFIER:precision=%d,boost=%d", &precision, &boost) == 2) {
+                        if (!emergency_stop_active && current_display_mode != DISPLAY_MODE_DRONE) {
+                            switch_display_mode(DISPLAY_MODE_DRONE, NULL, now_ms);
+                        }
+                        set_drone_mode_visible(true);
                         bool precision_active = (precision != 0);
                         bool boost_active = (boost != 0);
                         set_drone_modifier_indicator(precision_active, boost_active);
@@ -3133,6 +3280,9 @@ static void status_uart_task(void *arg)
                     if (xSemaphoreTake(lvgl_mux, pdMS_TO_TICKS(250)) == pdTRUE) {
                         if (!emergency_stop_active && current_display_mode != DISPLAY_MODE_DRONE) {
                             switch_display_mode(DISPLAY_MODE_DRONE, NULL, now_ms);
+                        }
+                        if (!is_drone_controls_visible()) {
+                            set_drone_mode_visible(true);
                         }
                         if (flowlapse_active) {
                             set_flowlapse_status(false, "FLOWLAPSE READY");
@@ -3362,72 +3512,116 @@ void app_main(void)
 
     drone_title_label = lv_label_create(lv_scr_act());
     lv_label_set_text(drone_title_label, "DRONE MODE");
-    lv_obj_set_style_text_font(drone_title_label, &lv_font_montserrat_48, LV_PART_MAIN);
+    lv_obj_set_style_text_font(drone_title_label, &lv_font_montserrat_40_limited, LV_PART_MAIN);
     lv_obj_set_style_text_color(drone_title_label, lv_color_white(), LV_PART_MAIN);
     lv_obj_set_style_text_align(drone_title_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
     lv_obj_set_width(drone_title_label, LCD_H_RES - 40);
-    lv_obj_set_pos(drone_title_label, 20, 8);
+    lv_obj_set_pos(drone_title_label, 20, 10);
+
+    drone_precision_card = lv_obj_create(lv_scr_act());
+    lv_obj_remove_style_all(drone_precision_card);
+    lv_obj_set_size(drone_precision_card, 186, 66);
+    lv_obj_set_pos(drone_precision_card, 13, 65);
+    lv_obj_set_style_radius(drone_precision_card, 10, LV_PART_MAIN);
+    lv_obj_set_style_border_width(drone_precision_card, 2, LV_PART_MAIN);
+    lv_obj_set_style_border_color(drone_precision_card, lv_color_make(80, 80, 95), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(drone_precision_card, lv_color_make(25, 27, 33), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(drone_precision_card, LV_OPA_70, LV_PART_MAIN);
+
+    drone_boost_card = lv_obj_create(lv_scr_act());
+    lv_obj_remove_style_all(drone_boost_card);
+    lv_obj_set_size(drone_boost_card, 186, 66);
+    lv_obj_set_pos(drone_boost_card, 207, 65);
+    lv_obj_set_style_radius(drone_boost_card, 10, LV_PART_MAIN);
+    lv_obj_set_style_border_width(drone_boost_card, 2, LV_PART_MAIN);
+    lv_obj_set_style_border_color(drone_boost_card, lv_color_make(80, 80, 95), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(drone_boost_card, lv_color_make(25, 27, 33), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(drone_boost_card, LV_OPA_70, LV_PART_MAIN);
+
+    drone_camera_card = lv_obj_create(lv_scr_act());
+    lv_obj_remove_style_all(drone_camera_card);
+    lv_obj_set_size(drone_camera_card, 186, 66);
+    lv_obj_set_pos(drone_camera_card, 401, 65);
+    lv_obj_set_style_radius(drone_camera_card, 10, LV_PART_MAIN);
+    lv_obj_set_style_border_width(drone_camera_card, 2, LV_PART_MAIN);
+    lv_obj_set_style_border_color(drone_camera_card, lv_color_make(80, 80, 95), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(drone_camera_card, lv_color_make(25, 27, 33), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(drone_camera_card, LV_OPA_70, LV_PART_MAIN);
+
+    drone_top_divider = lv_obj_create(lv_scr_act());
+    lv_obj_remove_style_all(drone_top_divider);
+    lv_obj_set_size(drone_top_divider, 574, 1);
+    lv_obj_set_pos(drone_top_divider, 13, 134);
+    lv_obj_set_style_bg_color(drone_top_divider, lv_color_make(90, 90, 105), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(drone_top_divider, LV_OPA_60, LV_PART_MAIN);
+
+    // Cards: 186px wide x 66px tall. x=13,207,401. y=55. Center y=88.
+    // Icon: card_x+12, y=81. Label: card_x+29, y=78. State box 34x34: card_x+142, y=71.
+    drone_precision_icon = lv_label_create(lv_scr_act());
+    lv_label_set_text(drone_precision_icon, LV_SYMBOL_PLUS);
+    lv_obj_set_style_text_color(drone_precision_icon, lv_color_make(140, 100, 220), LV_PART_MAIN);
+    lv_obj_set_style_text_font(drone_precision_icon, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_set_pos(drone_precision_icon, 25, 91);
 
     drone_precision_label = lv_label_create(lv_scr_act());
     lv_label_set_text(drone_precision_label, "PRECISION");
     lv_obj_set_style_text_color(drone_precision_label, lv_color_white(), LV_PART_MAIN);
-    lv_obj_set_style_text_font(drone_precision_label, &lv_font_montserrat_40_limited, LV_PART_MAIN);
-    lv_obj_set_style_text_letter_space(drone_precision_label, -3, LV_PART_MAIN);
+    lv_obj_set_style_text_font(drone_precision_label, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_set_style_text_letter_space(drone_precision_label, 0, LV_PART_MAIN);
     lv_obj_set_style_text_align(drone_precision_label, LV_TEXT_ALIGN_LEFT, LV_PART_MAIN);
-    lv_obj_set_pos(drone_precision_label, 42, 76);
+    lv_obj_set_pos(drone_precision_label, 42, 88);
     lv_obj_update_layout(drone_precision_label);
 
     drone_precision_state_box = lv_obj_create(lv_scr_act());
     lv_obj_remove_style_all(drone_precision_state_box);
-    lv_obj_set_size(drone_precision_state_box, 30, 30);
-    lv_obj_set_pos(drone_precision_state_box,
-                   lv_obj_get_x(drone_precision_label) + lv_obj_get_width(drone_precision_label) + 14,
-                   84);
+    lv_obj_set_size(drone_precision_state_box, 34, 34);
+    lv_obj_set_pos(drone_precision_state_box, 157, 81);
     lv_obj_set_style_radius(drone_precision_state_box, 4, LV_PART_MAIN);
     lv_obj_set_style_border_width(drone_precision_state_box, 2, LV_PART_MAIN);
     lv_obj_set_style_border_color(drone_precision_state_box, lv_color_make(200, 200, 200), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(drone_precision_state_box, LV_OPA_COVER, LV_PART_MAIN);
 
+    drone_boost_icon = lv_label_create(lv_scr_act());
+    lv_label_set_text(drone_boost_icon, LV_SYMBOL_CHARGE);
+    lv_obj_set_style_text_color(drone_boost_icon, lv_color_make(140, 100, 220), LV_PART_MAIN);
+    lv_obj_set_style_text_font(drone_boost_icon, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_set_pos(drone_boost_icon, 219, 91);
+
     drone_boost_label = lv_label_create(lv_scr_act());
     lv_label_set_text(drone_boost_label, "BOOST");
     lv_obj_set_style_text_color(drone_boost_label, lv_color_white(), LV_PART_MAIN);
-    lv_obj_set_style_text_font(drone_boost_label, &lv_font_montserrat_40_limited, LV_PART_MAIN);
-    lv_obj_set_style_text_letter_space(drone_boost_label, -3, LV_PART_MAIN);
+    lv_obj_set_style_text_font(drone_boost_label, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_set_style_text_letter_space(drone_boost_label, 0, LV_PART_MAIN);
     lv_obj_set_style_text_align(drone_boost_label, LV_TEXT_ALIGN_LEFT, LV_PART_MAIN);
-    lv_obj_update_layout(drone_boost_label);
-
-    // Fixed, overlap-safe anchor on the right half of the screen.
-    // Keep the same label-to-indicator gap as the other rows.
-    const int boost_y = 76;
-    const int boost_gap = 14;
-    const int boost_box_x = 540;
-    const int boost_label_x = boost_box_x - lv_obj_get_width(drone_boost_label) - boost_gap;
-    lv_obj_set_pos(drone_boost_label, boost_label_x, boost_y);
+    lv_obj_set_pos(drone_boost_label, 236, 88);
 
     drone_boost_state_box = lv_obj_create(lv_scr_act());
     lv_obj_remove_style_all(drone_boost_state_box);
-    lv_obj_set_size(drone_boost_state_box, 30, 30);
-    lv_obj_set_pos(drone_boost_state_box, boost_box_x, boost_y + 8);
+    lv_obj_set_size(drone_boost_state_box, 34, 34);
+    lv_obj_set_pos(drone_boost_state_box, 351, 81);
     lv_obj_set_style_radius(drone_boost_state_box, 4, LV_PART_MAIN);
     lv_obj_set_style_border_width(drone_boost_state_box, 2, LV_PART_MAIN);
     lv_obj_set_style_border_color(drone_boost_state_box, lv_color_make(200, 200, 200), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(drone_boost_state_box, LV_OPA_COVER, LV_PART_MAIN);
 
+    drone_camera_icon = lv_label_create(lv_scr_act());
+    lv_label_set_text(drone_camera_icon, LV_SYMBOL_IMAGE);
+    lv_obj_set_style_text_color(drone_camera_icon, lv_color_make(140, 100, 220), LV_PART_MAIN);
+    lv_obj_set_style_text_font(drone_camera_icon, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_set_pos(drone_camera_icon, 413, 91);
+
     drone_camera_label = lv_label_create(lv_scr_act());
     lv_label_set_text(drone_camera_label, "CAMERA");
     lv_obj_set_style_text_color(drone_camera_label, lv_color_white(), LV_PART_MAIN);
-    lv_obj_set_style_text_font(drone_camera_label, &lv_font_montserrat_40_limited, LV_PART_MAIN);
-    lv_obj_set_style_text_letter_space(drone_camera_label, -3, LV_PART_MAIN);
+    lv_obj_set_style_text_font(drone_camera_label, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_set_style_text_letter_space(drone_camera_label, 0, LV_PART_MAIN);
     lv_obj_set_style_text_align(drone_camera_label, LV_TEXT_ALIGN_LEFT, LV_PART_MAIN);
-    lv_obj_set_pos(drone_camera_label, 220, 126);
-    lv_obj_update_layout(drone_camera_label);
+    lv_obj_set_pos(drone_camera_label, 430, 88);
 
     drone_camera_state_box = lv_obj_create(lv_scr_act());
     lv_obj_remove_style_all(drone_camera_state_box);
-    lv_obj_set_size(drone_camera_state_box, 30, 30);
-    lv_obj_set_pos(drone_camera_state_box,
-                   lv_obj_get_x(drone_camera_label) + lv_obj_get_width(drone_camera_label) + 14,
-                   134);
+    lv_obj_set_size(drone_camera_state_box, 34, 34);
+    lv_obj_set_pos(drone_camera_state_box, 545, 81);
     lv_obj_set_style_radius(drone_camera_state_box, 4, LV_PART_MAIN);
     lv_obj_set_style_border_width(drone_camera_state_box, 2, LV_PART_MAIN);
     lv_obj_set_style_border_color(drone_camera_state_box, lv_color_make(200, 200, 200), LV_PART_MAIN);
@@ -3439,19 +3633,19 @@ void app_main(void)
     drone_left_ring = lv_obj_create(lv_scr_act());
     lv_obj_remove_style_all(drone_left_ring);
     lv_obj_set_size(drone_left_ring, 170, 170);
-    lv_obj_set_pos(drone_left_ring, 70, 226);
+    lv_obj_set_pos(drone_left_ring, 78, 182);
     lv_obj_set_style_radius(drone_left_ring, LV_RADIUS_CIRCLE, LV_PART_MAIN);
     lv_obj_set_style_border_width(drone_left_ring, 3, LV_PART_MAIN);
-    lv_obj_set_style_border_color(drone_left_ring, lv_color_make(120, 120, 120), LV_PART_MAIN);
+    lv_obj_set_style_border_color(drone_left_ring, lv_color_make(185, 170, 220), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(drone_left_ring, LV_OPA_TRANSP, LV_PART_MAIN);
 
     drone_right_ring = lv_obj_create(lv_scr_act());
     lv_obj_remove_style_all(drone_right_ring);
     lv_obj_set_size(drone_right_ring, 170, 170);
-    lv_obj_set_pos(drone_right_ring, 360, 226);
+    lv_obj_set_pos(drone_right_ring, 352, 182);
     lv_obj_set_style_radius(drone_right_ring, LV_RADIUS_CIRCLE, LV_PART_MAIN);
     lv_obj_set_style_border_width(drone_right_ring, 3, LV_PART_MAIN);
-    lv_obj_set_style_border_color(drone_right_ring, lv_color_make(120, 120, 120), LV_PART_MAIN);
+    lv_obj_set_style_border_color(drone_right_ring, lv_color_make(185, 170, 220), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(drone_right_ring, LV_OPA_TRANSP, LV_PART_MAIN);
 
     drone_left_stick = lv_obj_create(lv_scr_act());
@@ -3470,15 +3664,107 @@ void app_main(void)
     lv_obj_set_style_bg_color(drone_right_stick, lv_color_white(), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(drone_right_stick, LV_OPA_COVER, LV_PART_MAIN);
 
+    // Direction arrows around joystick rings.
+    // Left ring: pos(78,182) size(170,170) center(163,267). Right ring: pos(352,182) center(437,267).
+    // All arrows use LV_SYMBOL_* (FontAwesome glyphs built into montserrat fonts).
+    lv_obj_t *left_arrow_up = lv_label_create(lv_scr_act());
+    lv_label_set_text(left_arrow_up, LV_SYMBOL_UP);
+    lv_obj_set_style_text_color(left_arrow_up, lv_color_make(175, 165, 200), LV_PART_MAIN);
+    lv_obj_set_style_text_font(left_arrow_up, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_set_pos(left_arrow_up, 153, 158);
+
+    lv_obj_t *left_arrow_down = lv_label_create(lv_scr_act());
+    lv_label_set_text(left_arrow_down, LV_SYMBOL_DOWN);
+    lv_obj_set_style_text_color(left_arrow_down, lv_color_make(175, 165, 200), LV_PART_MAIN);
+    lv_obj_set_style_text_font(left_arrow_down, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_set_pos(left_arrow_down, 153, 355);
+
+    lv_obj_t *left_arrow_left = lv_label_create(lv_scr_act());
+    lv_label_set_text(left_arrow_left, LV_SYMBOL_LEFT);
+    lv_obj_set_style_text_color(left_arrow_left, lv_color_make(175, 165, 200), LV_PART_MAIN);
+    lv_obj_set_style_text_font(left_arrow_left, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_set_pos(left_arrow_left, 46, 257);
+
+    lv_obj_t *left_arrow_right = lv_label_create(lv_scr_act());
+    lv_label_set_text(left_arrow_right, LV_SYMBOL_RIGHT);
+    lv_obj_set_style_text_color(left_arrow_right, lv_color_make(175, 165, 200), LV_PART_MAIN);
+    lv_obj_set_style_text_font(left_arrow_right, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_set_pos(left_arrow_right, 256, 257);
+
+    lv_obj_t *right_arrow_up = lv_label_create(lv_scr_act());
+    lv_label_set_text(right_arrow_up, LV_SYMBOL_UP);
+    lv_obj_set_style_text_color(right_arrow_up, lv_color_make(175, 165, 200), LV_PART_MAIN);
+    lv_obj_set_style_text_font(right_arrow_up, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_set_pos(right_arrow_up, 427, 158);
+
+    lv_obj_t *right_arrow_down = lv_label_create(lv_scr_act());
+    lv_label_set_text(right_arrow_down, LV_SYMBOL_DOWN);
+    lv_obj_set_style_text_color(right_arrow_down, lv_color_make(175, 165, 200), LV_PART_MAIN);
+    lv_obj_set_style_text_font(right_arrow_down, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_set_pos(right_arrow_down, 427, 355);
+
+    lv_obj_t *right_arrow_left = lv_label_create(lv_scr_act());
+    lv_label_set_text(right_arrow_left, LV_SYMBOL_LEFT);
+    lv_obj_set_style_text_color(right_arrow_left, lv_color_make(175, 165, 200), LV_PART_MAIN);
+    lv_obj_set_style_text_font(right_arrow_left, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_set_pos(right_arrow_left, 320, 257);
+
+    lv_obj_t *right_arrow_right = lv_label_create(lv_scr_act());
+    lv_label_set_text(right_arrow_right, LV_SYMBOL_RIGHT);
+    lv_obj_set_style_text_color(right_arrow_right, lv_color_make(175, 165, 200), LV_PART_MAIN);
+    lv_obj_set_style_text_font(right_arrow_right, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_set_pos(right_arrow_right, 530, 257);
+
     drone_center_line = lv_obj_create(lv_scr_act());
     lv_obj_remove_style_all(drone_center_line);
-    lv_obj_set_size(drone_center_line, 120, 2);
-    lv_obj_set_pos(drone_center_line, 240, 310);
+    lv_obj_set_size(drone_center_line, 2, 222);
+    lv_obj_set_pos(drone_center_line, 299, 172);
     lv_obj_set_style_bg_opa(drone_center_line, LV_OPA_TRANSP, LV_PART_MAIN);
-    lv_obj_set_style_border_side(drone_center_line, LV_BORDER_SIDE_TOP, LV_PART_MAIN);
+    lv_obj_set_style_border_side(drone_center_line, LV_BORDER_SIDE_LEFT, LV_PART_MAIN);
     lv_obj_set_style_border_width(drone_center_line, 2, LV_PART_MAIN);
-    lv_obj_set_style_border_color(drone_center_line, lv_color_white(), LV_PART_MAIN);
-    lv_obj_set_style_border_opa(drone_center_line, LV_OPA_50, LV_PART_MAIN);
+    lv_obj_set_style_border_color(drone_center_line, lv_color_make(95, 95, 110), LV_PART_MAIN);
+    lv_obj_set_style_border_opa(drone_center_line, LV_OPA_70, LV_PART_MAIN);
+
+    drone_stick_controls_label = lv_label_create(lv_scr_act());
+    lv_label_set_text(drone_stick_controls_label, "STICK CONTROLS");
+    lv_obj_set_style_text_color(drone_stick_controls_label, lv_color_make(200, 200, 210), LV_PART_MAIN);
+    lv_obj_set_style_text_font(drone_stick_controls_label, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_set_style_text_letter_space(drone_stick_controls_label, 1, LV_PART_MAIN);
+    lv_obj_set_style_text_align(drone_stick_controls_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    lv_obj_set_width(drone_stick_controls_label, LCD_H_RES);
+    lv_obj_set_pos(drone_stick_controls_label, 0, 136);
+
+    drone_left_stick_label = lv_label_create(lv_scr_act());
+    lv_label_set_text(drone_left_stick_label, "LEFT STICK");
+    lv_obj_set_style_text_color(drone_left_stick_label, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_text_font(drone_left_stick_label, &lv_font_montserrat_28, LV_PART_MAIN);
+    lv_obj_set_style_text_align(drone_left_stick_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    lv_obj_set_width(drone_left_stick_label, 220);
+    lv_obj_set_pos(drone_left_stick_label, 52, 382);
+
+    drone_left_axis_label = lv_label_create(lv_scr_act());
+    lv_label_set_text(drone_left_axis_label, "SWING / LIFT");
+    lv_obj_set_style_text_color(drone_left_axis_label, lv_color_make(175, 175, 185), LV_PART_MAIN);
+    lv_obj_set_style_text_font(drone_left_axis_label, &lv_font_montserrat_28, LV_PART_MAIN);
+    lv_obj_set_style_text_align(drone_left_axis_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    lv_obj_set_width(drone_left_axis_label, 220);
+    lv_obj_set_pos(drone_left_axis_label, 52, 416);
+
+    drone_right_stick_label = lv_label_create(lv_scr_act());
+    lv_label_set_text(drone_right_stick_label, "RIGHT STICK");
+    lv_obj_set_style_text_color(drone_right_stick_label, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_text_font(drone_right_stick_label, &lv_font_montserrat_28, LV_PART_MAIN);
+    lv_obj_set_style_text_align(drone_right_stick_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    lv_obj_set_width(drone_right_stick_label, 220);
+    lv_obj_set_pos(drone_right_stick_label, 328, 382);
+
+    drone_right_axis_label = lv_label_create(lv_scr_act());
+    lv_label_set_text(drone_right_axis_label, "PAN / TILT");
+    lv_obj_set_style_text_color(drone_right_axis_label, lv_color_make(175, 175, 185), LV_PART_MAIN);
+    lv_obj_set_style_text_font(drone_right_axis_label, &lv_font_montserrat_28, LV_PART_MAIN);
+    lv_obj_set_style_text_align(drone_right_axis_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    lv_obj_set_width(drone_right_axis_label, 220);
+    lv_obj_set_pos(drone_right_axis_label, 328, 416);
 
     drone_flowlapse_bar = lv_obj_create(lv_scr_act());
     lv_obj_remove_style_all(drone_flowlapse_bar);

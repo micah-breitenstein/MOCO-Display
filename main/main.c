@@ -242,11 +242,36 @@ static lv_obj_t *drone_left_stick_label = NULL;
 static lv_obj_t *drone_left_axis_label = NULL;
 static lv_obj_t *drone_right_stick_label = NULL;
 static lv_obj_t *drone_right_axis_label = NULL;
+static lv_obj_t *drone_left_arrow_up = NULL;
+static lv_obj_t *drone_left_arrow_down = NULL;
+static lv_obj_t *drone_left_arrow_left = NULL;
+static lv_obj_t *drone_left_arrow_right = NULL;
+static lv_obj_t *drone_right_arrow_up = NULL;
+static lv_obj_t *drone_right_arrow_down = NULL;
+static lv_obj_t *drone_right_arrow_left = NULL;
+static lv_obj_t *drone_right_arrow_right = NULL;
 static lv_obj_t *drone_flowlapse_bar = NULL;
 static lv_obj_t *drone_flowlapse_fill = NULL;
 static lv_obj_t *drone_flowlapse_label = NULL;
 static lv_obj_t *drone_flowlapse_sub_label = NULL;
 static lv_obj_t *drone_flowlapse_waypoint_label = NULL;
+/* ---- Flowlapse status card (reference-style) ---- */
+#define FL_WP_MAX_SQUARES 8
+static lv_obj_t *flowlapse_status_card  = NULL;
+static lv_obj_t *fl_icon_circle         = NULL;
+static lv_obj_t *fl_icon_label          = NULL;
+static lv_obj_t *fl_status_text_label   = NULL;
+static lv_obj_t *fl_wp_num_label        = NULL;
+static lv_obj_t *fl_wp_word_label       = NULL;
+static lv_obj_t *fl_wp_squares[FL_WP_MAX_SQUARES];
+static lv_obj_t *fl_divider_line        = NULL;
+static lv_obj_t *fl_prompt_label        = NULL;
+static lv_obj_t *fl_title_line_left     = NULL;
+static lv_obj_t *fl_title_line_right    = NULL;
+static lv_obj_t *fl_capture_bar         = NULL;
+static lv_obj_t *fl_capture_fill        = NULL;
+#define FL_CAPTURE_BAR_W 520
+#define FL_CAPTURE_BAR_H 18
 static lv_obj_t *settings_list_panel = NULL;
 static lv_obj_t *settings_editor_panel = NULL;
 static lv_obj_t *settings_confirm_panel = NULL;
@@ -310,13 +335,13 @@ static bool flowlapse_playback_active = false;
 #define FLOWLAPSE_BAR_NORMAL_W (LCD_H_RES - 120)
 #define FLOWLAPSE_BAR_NORMAL_H 36
 
-#define FLOWLAPSE_LABEL_NORMAL_Y 150
+#define FLOWLAPSE_LABEL_NORMAL_Y 148
 
 #define FLOWLAPSE_BAR_PLAYBACK_X 20
 #define FLOWLAPSE_BAR_PLAYBACK_Y 184
 #define FLOWLAPSE_BAR_PLAYBACK_W (LCD_H_RES - 40)
 #define FLOWLAPSE_BAR_PLAYBACK_H (FLOWLAPSE_BAR_NORMAL_H * 4)
-#define FLOWLAPSE_LABEL_PLAYBACK_Y (FLOWLAPSE_BAR_PLAYBACK_Y + ((FLOWLAPSE_BAR_PLAYBACK_H - 36) / 2))
+#define FLOWLAPSE_LABEL_PLAYBACK_Y (FLOWLAPSE_BAR_PLAYBACK_Y + ((FLOWLAPSE_BAR_PLAYBACK_H - 28) / 2))
 #define FLOWLAPSE_LABEL_PREVIEW_COMPLETE_Y (FLOWLAPSE_LABEL_PLAYBACK_Y - 20)
 #define FLOWLAPSE_SUBLABEL_PREVIEW_COMPLETE_Y (FLOWLAPSE_LABEL_PREVIEW_COMPLETE_Y + 52)
 
@@ -2252,6 +2277,142 @@ static void set_flowlapse_progress(int progress_percent)
         lv_obj_set_width(drone_flowlapse_fill, fill_width);
         lv_obj_set_height(drone_flowlapse_fill, fill_height);
     }
+    /* Update card progress bar fill */
+    if (fl_capture_fill) {
+        int fill_w = ((FL_CAPTURE_BAR_W - 6) * progress_percent) / 100;
+        lv_obj_set_width(fl_capture_fill, fill_w);
+    }
+}
+
+static void refresh_flowlapse_card(void)
+{
+    if (!flowlapse_status_card) return;
+
+    bool drone_on = (current_display_mode == DISPLAY_MODE_DRONE);
+    bool show_card = flowlapse_active && drone_on;
+
+    /* Base show/hide — always-visible card core */
+    lv_obj_t *core_objs[] = { flowlapse_status_card, fl_icon_circle, fl_icon_label, fl_status_text_label };
+    for (int i = 0; i < 4; i++) {
+        if (!core_objs[i]) continue;
+        show_card ? lv_obj_clear_flag(core_objs[i], LV_OBJ_FLAG_HIDDEN)
+                  : lv_obj_add_flag(core_objs[i], LV_OBJ_FLAG_HIDDEN);
+    }
+    /* Conditional elements — default hidden, re-shown below if appropriate */
+    if (fl_wp_num_label)  lv_obj_add_flag(fl_wp_num_label,  LV_OBJ_FLAG_HIDDEN);
+    if (fl_wp_word_label) lv_obj_add_flag(fl_wp_word_label, LV_OBJ_FLAG_HIDDEN);
+    if (fl_divider_line)  lv_obj_add_flag(fl_divider_line,  LV_OBJ_FLAG_HIDDEN);
+    if (fl_prompt_label)  lv_obj_add_flag(fl_prompt_label,  LV_OBJ_FLAG_HIDDEN);
+    if (fl_capture_bar)   lv_obj_add_flag(fl_capture_bar,   LV_OBJ_FLAG_HIDDEN);
+    for (int i = 0; i < FL_WP_MAX_SQUARES; i++) {
+        if (fl_wp_squares[i]) lv_obj_add_flag(fl_wp_squares[i], LV_OBJ_FLAG_HIDDEN);
+    }
+
+    if (!show_card) return;
+
+    /* Suppress legacy bar/labels while card is showing */
+    if (drone_flowlapse_bar)            lv_obj_add_flag(drone_flowlapse_bar,           LV_OBJ_FLAG_HIDDEN);
+    if (drone_flowlapse_label)          lv_obj_add_flag(drone_flowlapse_label,          LV_OBJ_FLAG_HIDDEN);
+    if (drone_flowlapse_sub_label)      lv_obj_add_flag(drone_flowlapse_sub_label,      LV_OBJ_FLAG_HIDDEN);
+    if (drone_flowlapse_waypoint_label) lv_obj_add_flag(drone_flowlapse_waypoint_label, LV_OBJ_FLAG_HIDDEN);
+
+    /* Determine icon, display text, and optional prompt from current status */
+    const char *status      = flowlapse_status_text;
+    const char *icon_sym    = LV_SYMBOL_OK;
+    lv_color_t  icon_color  = lv_color_make(0, 200, 200);
+    const char *prompt_text = NULL;
+    const char *display_text;
+    char        display_buf[64];
+
+    if (strstr(status, "PREVIEW COMPLETE") != NULL) {
+        icon_sym     = LV_SYMBOL_OK;
+        display_text = "PREVIEW COMPLETE";
+        prompt_text  = "PRESS START TO CAPTURE";
+    } else if (strstr(status, "REC STOPPED") != NULL) {
+        icon_sym     = LV_SYMBOL_STOP;
+        display_text = "RECORDING COMPLETE";
+        prompt_text  = "PRESS SELECT TO CONTINUE";
+    } else if (strstr(status, "RETURNING") != NULL) {
+        icon_sym     = LV_SYMBOL_LEFT;
+        icon_color   = lv_color_make(240, 180, 0);
+        display_text = "RETURNING TO ORIGIN";
+    } else if (strstr(status, "AT WP 1") != NULL) {
+        icon_sym     = LV_SYMBOL_PLAY;
+        display_text = "AT ORIGIN";
+        prompt_text  = "PRESS START TO BEGIN";
+    } else if (strstr(status, "PREVIEW") != NULL) {
+        icon_sym     = LV_SYMBOL_EYE_OPEN;
+        display_text = "PREVIEWING";
+    } else if (strstr(status, "PAUSED") != NULL) {
+        icon_sym     = LV_SYMBOL_PAUSE;
+        icon_color   = lv_color_make(240, 180, 0);
+        display_text = "CAPTURE PAUSED";
+        prompt_text  = "PRESS START TO RESUME";
+        if (fl_capture_bar) lv_obj_clear_flag(fl_capture_bar, LV_OBJ_FLAG_HIDDEN);
+    } else if (strstr(status, "ETA") != NULL) {
+        icon_sym     = LV_SYMBOL_IMAGE;
+        snprintf(display_buf, sizeof(display_buf), "%s", status);
+        display_text = display_buf;
+        if (fl_capture_bar) lv_obj_clear_flag(fl_capture_bar, LV_OBJ_FLAG_HIDDEN);
+    } else if (strstr(status, "CAPTURE") != NULL) {
+        icon_sym     = LV_SYMBOL_IMAGE;
+        display_text = "CAPTURE RUNNING";
+        if (fl_capture_bar) lv_obj_clear_flag(fl_capture_bar, LV_OBJ_FLAG_HIDDEN);
+    } else if (strstr(status, "READY") != NULL) {
+        icon_sym     = LV_SYMBOL_EDIT;
+        display_text = "RECORDING ARMED";
+    } else {
+        snprintf(display_buf, sizeof(display_buf), "%s", status);
+        display_text = display_buf;
+    }
+
+    if (fl_icon_circle) lv_obj_set_style_border_color(fl_icon_circle, icon_color, LV_PART_MAIN);
+    if (fl_icon_label) {
+        lv_label_set_text(fl_icon_label, icon_sym);
+        lv_obj_set_style_text_color(fl_icon_label, icon_color, LV_PART_MAIN);
+    }
+    if (fl_status_text_label) lv_label_set_text(fl_status_text_label, display_text);
+
+    /* Waypoint count + progress squares */
+    if (flowlapse_waypoint_total > 0) {
+        if (fl_wp_num_label) {
+            char wp_text[16];
+            snprintf(wp_text, sizeof(wp_text), "%d/%d",
+                     flowlapse_waypoint_current, flowlapse_waypoint_total);
+            lv_label_set_text(fl_wp_num_label, wp_text);
+            lv_obj_clear_flag(fl_wp_num_label, LV_OBJ_FLAG_HIDDEN);
+        }
+        if (fl_wp_word_label) lv_obj_clear_flag(fl_wp_word_label, LV_OBJ_FLAG_HIDDEN);
+
+        int total      = flowlapse_waypoint_total;
+        int current_wp = flowlapse_waypoint_current;
+        int sq_total_w = total * 46 + (total > 1 ? (total - 1) * 8 : 0);
+        int sq_x_start = (LCD_H_RES - sq_total_w) / 2;
+        lv_color_t filled_col  = lv_color_make(240, 180, 0);
+        lv_color_t empty_col   = lv_color_make(35,  35,  40);
+        lv_color_t border_col  = lv_color_make(100, 100, 100);
+        for (int i = 0; i < FL_WP_MAX_SQUARES; i++) {
+            if (!fl_wp_squares[i]) continue;
+            if (i >= total) {
+                lv_obj_add_flag(fl_wp_squares[i], LV_OBJ_FLAG_HIDDEN);
+            } else {
+                lv_obj_set_x(fl_wp_squares[i], sq_x_start + i * 54);
+                bool is_filled = (i < current_wp);
+                lv_obj_set_style_bg_color(fl_wp_squares[i],
+                    is_filled ? filled_col : empty_col, LV_PART_MAIN);
+                lv_obj_set_style_border_color(fl_wp_squares[i],
+                    is_filled ? filled_col : border_col, LV_PART_MAIN);
+                lv_obj_clear_flag(fl_wp_squares[i], LV_OBJ_FLAG_HIDDEN);
+            }
+        }
+    }
+
+    /* Prompt + divider */
+    if (prompt_text && fl_prompt_label) {
+        lv_label_set_text(fl_prompt_label, prompt_text);
+        lv_obj_clear_flag(fl_prompt_label, LV_OBJ_FLAG_HIDDEN);
+        if (fl_divider_line) lv_obj_clear_flag(fl_divider_line, LV_OBJ_FLAG_HIDDEN);
+    }
 }
 
 static void update_flowlapse_layout(void)
@@ -2287,6 +2448,29 @@ static void update_flowlapse_layout(void)
         lv_obj_set_width(drone_flowlapse_sub_label, bar_w);
     }
 
+    // When flowlapse is active, hide joystick cluster and modifier cards.
+    // Only restore them when flowlapse ends AND drone mode is currently active.
+    bool fl = flowlapse_active;
+    bool drone_on = (current_display_mode == DISPLAY_MODE_DRONE);
+#define FL_VIS(obj) do { if (obj) { if (fl) lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN); else if (drone_on) lv_obj_clear_flag(obj, LV_OBJ_FLAG_HIDDEN); } } while(0)
+    FL_VIS(drone_left_ring);    FL_VIS(drone_right_ring);
+    FL_VIS(drone_left_stick);   FL_VIS(drone_right_stick);
+    FL_VIS(drone_center_line);  FL_VIS(drone_stick_controls_label);
+    FL_VIS(drone_left_stick_label);  FL_VIS(drone_left_axis_label);
+    FL_VIS(drone_right_stick_label); FL_VIS(drone_right_axis_label);
+    FL_VIS(drone_left_arrow_up);     FL_VIS(drone_left_arrow_down);
+    FL_VIS(drone_left_arrow_left);   FL_VIS(drone_left_arrow_right);
+    FL_VIS(drone_right_arrow_up);    FL_VIS(drone_right_arrow_down);
+    FL_VIS(drone_right_arrow_left);  FL_VIS(drone_right_arrow_right);
+    FL_VIS(drone_precision_card);    FL_VIS(drone_precision_icon);
+    FL_VIS(drone_precision_label);   FL_VIS(drone_precision_state_box);
+    FL_VIS(drone_boost_card);        FL_VIS(drone_boost_icon);
+    FL_VIS(drone_boost_label);       FL_VIS(drone_boost_state_box);
+    FL_VIS(drone_camera_card);       FL_VIS(drone_camera_icon);
+    FL_VIS(drone_camera_label);      FL_VIS(drone_camera_state_box);
+    FL_VIS(drone_top_divider);
+#undef FL_VIS
+
     set_flowlapse_progress(flowlapse_progress_percent);
 }
 
@@ -2318,6 +2502,7 @@ static void refresh_flowlapse_status_label(void)
     } else {
         lv_label_set_text(drone_flowlapse_label, flowlapse_status_text);
     }
+    refresh_flowlapse_card();
 }
 
 static void set_flowlapse_status(bool active, const char *text)
@@ -2327,6 +2512,18 @@ static void set_flowlapse_status(bool active, const char *text)
     if (!active) {
         flowlapse_playback_active = false;
     }
+
+    if (drone_title_label) {
+        lv_label_set_text(drone_title_label, active ? "FLOW-LAPSE" : "DRONE MODE");
+        lv_obj_set_style_text_font(drone_title_label,
+            active ? &lv_font_montserrat_20 : &lv_font_montserrat_40_limited, LV_PART_MAIN);
+        lv_obj_set_style_text_color(drone_title_label,
+            active ? lv_color_make(150, 155, 165) : lv_color_white(), LV_PART_MAIN);
+        lv_obj_set_style_text_letter_space(drone_title_label, active ? 5 : 0, LV_PART_MAIN);
+    }
+    /* Decorative side lines for flowlapse title */
+    if (fl_title_line_left)  { active ? lv_obj_clear_flag(fl_title_line_left,  LV_OBJ_FLAG_HIDDEN) : lv_obj_add_flag(fl_title_line_left,  LV_OBJ_FLAG_HIDDEN); }
+    if (fl_title_line_right) { active ? lv_obj_clear_flag(fl_title_line_right, LV_OBJ_FLAG_HIDDEN) : lv_obj_add_flag(fl_title_line_right, LV_OBJ_FLAG_HIDDEN); }
 
     if (text && text[0] != '\0') {
         snprintf(flowlapse_status_text, sizeof(flowlapse_status_text), "%s", text);
@@ -2395,6 +2592,14 @@ static void set_flowlapse_status(bool active, const char *text)
         show_joystick_cluster ? lv_obj_clear_flag(drone_center_line, LV_OBJ_FLAG_HIDDEN)
                               : lv_obj_add_flag(drone_center_line, LV_OBJ_FLAG_HIDDEN);
     }
+    if (drone_left_arrow_up)    { show_joystick_cluster ? lv_obj_clear_flag(drone_left_arrow_up, LV_OBJ_FLAG_HIDDEN)    : lv_obj_add_flag(drone_left_arrow_up, LV_OBJ_FLAG_HIDDEN); }
+    if (drone_left_arrow_down)  { show_joystick_cluster ? lv_obj_clear_flag(drone_left_arrow_down, LV_OBJ_FLAG_HIDDEN)  : lv_obj_add_flag(drone_left_arrow_down, LV_OBJ_FLAG_HIDDEN); }
+    if (drone_left_arrow_left)  { show_joystick_cluster ? lv_obj_clear_flag(drone_left_arrow_left, LV_OBJ_FLAG_HIDDEN)  : lv_obj_add_flag(drone_left_arrow_left, LV_OBJ_FLAG_HIDDEN); }
+    if (drone_left_arrow_right) { show_joystick_cluster ? lv_obj_clear_flag(drone_left_arrow_right, LV_OBJ_FLAG_HIDDEN) : lv_obj_add_flag(drone_left_arrow_right, LV_OBJ_FLAG_HIDDEN); }
+    if (drone_right_arrow_up)   { show_joystick_cluster ? lv_obj_clear_flag(drone_right_arrow_up, LV_OBJ_FLAG_HIDDEN)   : lv_obj_add_flag(drone_right_arrow_up, LV_OBJ_FLAG_HIDDEN); }
+    if (drone_right_arrow_down) { show_joystick_cluster ? lv_obj_clear_flag(drone_right_arrow_down, LV_OBJ_FLAG_HIDDEN) : lv_obj_add_flag(drone_right_arrow_down, LV_OBJ_FLAG_HIDDEN); }
+    if (drone_right_arrow_left) { show_joystick_cluster ? lv_obj_clear_flag(drone_right_arrow_left, LV_OBJ_FLAG_HIDDEN) : lv_obj_add_flag(drone_right_arrow_left, LV_OBJ_FLAG_HIDDEN); }
+    if (drone_right_arrow_right){ show_joystick_cluster ? lv_obj_clear_flag(drone_right_arrow_right, LV_OBJ_FLAG_HIDDEN): lv_obj_add_flag(drone_right_arrow_right, LV_OBJ_FLAG_HIDDEN); }
     if (drone_top_divider) {
         show_modifiers ? lv_obj_clear_flag(drone_top_divider, LV_OBJ_FLAG_HIDDEN)
                    : lv_obj_add_flag(drone_top_divider, LV_OBJ_FLAG_HIDDEN);
@@ -2464,6 +2669,7 @@ static void set_flowlapse_waypoint_count(int current, int total)
         snprintf(waypoint_text, sizeof(waypoint_text), "%d/%d", current, total);
         lv_label_set_text(drone_flowlapse_waypoint_label, waypoint_text);
     }
+    refresh_flowlapse_card();
 }
 
 static void set_drone_modifier_indicator(bool precision_active, bool boost_active)
@@ -2620,6 +2826,14 @@ static void set_drone_mode_visible(bool visible)
     if (drone_center_line) {
         show_joystick_cluster ? lv_obj_clear_flag(drone_center_line, LV_OBJ_FLAG_HIDDEN) : lv_obj_add_flag(drone_center_line, LV_OBJ_FLAG_HIDDEN);
     }
+    if (drone_left_arrow_up)    { show_joystick_cluster ? lv_obj_clear_flag(drone_left_arrow_up, LV_OBJ_FLAG_HIDDEN)    : lv_obj_add_flag(drone_left_arrow_up, LV_OBJ_FLAG_HIDDEN); }
+    if (drone_left_arrow_down)  { show_joystick_cluster ? lv_obj_clear_flag(drone_left_arrow_down, LV_OBJ_FLAG_HIDDEN)  : lv_obj_add_flag(drone_left_arrow_down, LV_OBJ_FLAG_HIDDEN); }
+    if (drone_left_arrow_left)  { show_joystick_cluster ? lv_obj_clear_flag(drone_left_arrow_left, LV_OBJ_FLAG_HIDDEN)  : lv_obj_add_flag(drone_left_arrow_left, LV_OBJ_FLAG_HIDDEN); }
+    if (drone_left_arrow_right) { show_joystick_cluster ? lv_obj_clear_flag(drone_left_arrow_right, LV_OBJ_FLAG_HIDDEN) : lv_obj_add_flag(drone_left_arrow_right, LV_OBJ_FLAG_HIDDEN); }
+    if (drone_right_arrow_up)   { show_joystick_cluster ? lv_obj_clear_flag(drone_right_arrow_up, LV_OBJ_FLAG_HIDDEN)   : lv_obj_add_flag(drone_right_arrow_up, LV_OBJ_FLAG_HIDDEN); }
+    if (drone_right_arrow_down) { show_joystick_cluster ? lv_obj_clear_flag(drone_right_arrow_down, LV_OBJ_FLAG_HIDDEN) : lv_obj_add_flag(drone_right_arrow_down, LV_OBJ_FLAG_HIDDEN); }
+    if (drone_right_arrow_left) { show_joystick_cluster ? lv_obj_clear_flag(drone_right_arrow_left, LV_OBJ_FLAG_HIDDEN) : lv_obj_add_flag(drone_right_arrow_left, LV_OBJ_FLAG_HIDDEN); }
+    if (drone_right_arrow_right){ show_joystick_cluster ? lv_obj_clear_flag(drone_right_arrow_right, LV_OBJ_FLAG_HIDDEN): lv_obj_add_flag(drone_right_arrow_right, LV_OBJ_FLAG_HIDDEN); }
     if (drone_precision_label) {
         show_modifiers ? lv_obj_clear_flag(drone_precision_label, LV_OBJ_FLAG_HIDDEN) : lv_obj_add_flag(drone_precision_label, LV_OBJ_FLAG_HIDDEN);
     }
@@ -2659,6 +2873,7 @@ static void set_drone_mode_visible(bool visible)
     if (visible) {
         update_flowlapse_layout();
     }
+    refresh_flowlapse_card();
 }
 
 static bool is_drone_controls_visible(void)
@@ -3553,7 +3768,7 @@ void app_main(void)
     lv_obj_set_size(drone_top_divider, 574, 1);
     lv_obj_set_pos(drone_top_divider, 13, 134);
     lv_obj_set_style_bg_color(drone_top_divider, lv_color_make(90, 90, 105), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(drone_top_divider, LV_OPA_60, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(drone_top_divider, LV_OPA_TRANSP, LV_PART_MAIN);
 
     // Cards: 186px wide x 66px tall. x=13,207,401. y=55. Center y=88.
     // Icon: card_x+12, y=81. Label: card_x+29, y=78. State box 34x34: card_x+142, y=71.
@@ -3561,21 +3776,21 @@ void app_main(void)
     lv_label_set_text(drone_precision_icon, LV_SYMBOL_PLUS);
     lv_obj_set_style_text_color(drone_precision_icon, lv_color_make(140, 100, 220), LV_PART_MAIN);
     lv_obj_set_style_text_font(drone_precision_icon, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_set_pos(drone_precision_icon, 25, 91);
+    lv_obj_set_pos(drone_precision_icon, 25, 92);
 
     drone_precision_label = lv_label_create(lv_scr_act());
     lv_label_set_text(drone_precision_label, "PRECISION");
     lv_obj_set_style_text_color(drone_precision_label, lv_color_white(), LV_PART_MAIN);
-    lv_obj_set_style_text_font(drone_precision_label, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_set_style_text_font(drone_precision_label, &lv_font_montserrat_16, LV_PART_MAIN);
     lv_obj_set_style_text_letter_space(drone_precision_label, 0, LV_PART_MAIN);
     lv_obj_set_style_text_align(drone_precision_label, LV_TEXT_ALIGN_LEFT, LV_PART_MAIN);
-    lv_obj_set_pos(drone_precision_label, 42, 88);
+    lv_obj_set_pos(drone_precision_label, 42, 90);
     lv_obj_update_layout(drone_precision_label);
 
     drone_precision_state_box = lv_obj_create(lv_scr_act());
     lv_obj_remove_style_all(drone_precision_state_box);
     lv_obj_set_size(drone_precision_state_box, 34, 34);
-    lv_obj_set_pos(drone_precision_state_box, 157, 81);
+    lv_obj_set_pos(drone_precision_state_box, 153, 81);
     lv_obj_set_style_radius(drone_precision_state_box, 4, LV_PART_MAIN);
     lv_obj_set_style_border_width(drone_precision_state_box, 2, LV_PART_MAIN);
     lv_obj_set_style_border_color(drone_precision_state_box, lv_color_make(200, 200, 200), LV_PART_MAIN);
@@ -3585,20 +3800,20 @@ void app_main(void)
     lv_label_set_text(drone_boost_icon, LV_SYMBOL_CHARGE);
     lv_obj_set_style_text_color(drone_boost_icon, lv_color_make(140, 100, 220), LV_PART_MAIN);
     lv_obj_set_style_text_font(drone_boost_icon, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_set_pos(drone_boost_icon, 219, 91);
+    lv_obj_set_pos(drone_boost_icon, 219, 92);
 
     drone_boost_label = lv_label_create(lv_scr_act());
     lv_label_set_text(drone_boost_label, "BOOST");
     lv_obj_set_style_text_color(drone_boost_label, lv_color_white(), LV_PART_MAIN);
-    lv_obj_set_style_text_font(drone_boost_label, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_set_style_text_font(drone_boost_label, &lv_font_montserrat_16, LV_PART_MAIN);
     lv_obj_set_style_text_letter_space(drone_boost_label, 0, LV_PART_MAIN);
     lv_obj_set_style_text_align(drone_boost_label, LV_TEXT_ALIGN_LEFT, LV_PART_MAIN);
-    lv_obj_set_pos(drone_boost_label, 236, 88);
+    lv_obj_set_pos(drone_boost_label, 236, 90);
 
     drone_boost_state_box = lv_obj_create(lv_scr_act());
     lv_obj_remove_style_all(drone_boost_state_box);
     lv_obj_set_size(drone_boost_state_box, 34, 34);
-    lv_obj_set_pos(drone_boost_state_box, 351, 81);
+    lv_obj_set_pos(drone_boost_state_box, 347, 81);
     lv_obj_set_style_radius(drone_boost_state_box, 4, LV_PART_MAIN);
     lv_obj_set_style_border_width(drone_boost_state_box, 2, LV_PART_MAIN);
     lv_obj_set_style_border_color(drone_boost_state_box, lv_color_make(200, 200, 200), LV_PART_MAIN);
@@ -3608,20 +3823,20 @@ void app_main(void)
     lv_label_set_text(drone_camera_icon, LV_SYMBOL_IMAGE);
     lv_obj_set_style_text_color(drone_camera_icon, lv_color_make(140, 100, 220), LV_PART_MAIN);
     lv_obj_set_style_text_font(drone_camera_icon, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_set_pos(drone_camera_icon, 413, 91);
+    lv_obj_set_pos(drone_camera_icon, 413, 92);
 
     drone_camera_label = lv_label_create(lv_scr_act());
     lv_label_set_text(drone_camera_label, "CAMERA");
     lv_obj_set_style_text_color(drone_camera_label, lv_color_white(), LV_PART_MAIN);
-    lv_obj_set_style_text_font(drone_camera_label, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_set_style_text_font(drone_camera_label, &lv_font_montserrat_16, LV_PART_MAIN);
     lv_obj_set_style_text_letter_space(drone_camera_label, 0, LV_PART_MAIN);
     lv_obj_set_style_text_align(drone_camera_label, LV_TEXT_ALIGN_LEFT, LV_PART_MAIN);
-    lv_obj_set_pos(drone_camera_label, 430, 88);
+    lv_obj_set_pos(drone_camera_label, 430, 90);
 
     drone_camera_state_box = lv_obj_create(lv_scr_act());
     lv_obj_remove_style_all(drone_camera_state_box);
     lv_obj_set_size(drone_camera_state_box, 34, 34);
-    lv_obj_set_pos(drone_camera_state_box, 545, 81);
+    lv_obj_set_pos(drone_camera_state_box, 541, 81);
     lv_obj_set_style_radius(drone_camera_state_box, 4, LV_PART_MAIN);
     lv_obj_set_style_border_width(drone_camera_state_box, 2, LV_PART_MAIN);
     lv_obj_set_style_border_color(drone_camera_state_box, lv_color_make(200, 200, 200), LV_PART_MAIN);
@@ -3667,58 +3882,58 @@ void app_main(void)
     // Direction arrows around joystick rings.
     // Left ring: pos(78,182) size(170,170) center(163,267). Right ring: pos(352,182) center(437,267).
     // All arrows use LV_SYMBOL_* (FontAwesome glyphs built into montserrat fonts).
-    lv_obj_t *left_arrow_up = lv_label_create(lv_scr_act());
-    lv_label_set_text(left_arrow_up, LV_SYMBOL_UP);
-    lv_obj_set_style_text_color(left_arrow_up, lv_color_make(175, 165, 200), LV_PART_MAIN);
-    lv_obj_set_style_text_font(left_arrow_up, &lv_font_montserrat_20, LV_PART_MAIN);
-    lv_obj_set_pos(left_arrow_up, 153, 158);
+    drone_left_arrow_up = lv_label_create(lv_scr_act());
+    lv_label_set_text(drone_left_arrow_up, LV_SYMBOL_UP);
+    lv_obj_set_style_text_color(drone_left_arrow_up, lv_color_make(175, 165, 200), LV_PART_MAIN);
+    lv_obj_set_style_text_font(drone_left_arrow_up, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_set_pos(drone_left_arrow_up, 153, 158);
 
-    lv_obj_t *left_arrow_down = lv_label_create(lv_scr_act());
-    lv_label_set_text(left_arrow_down, LV_SYMBOL_DOWN);
-    lv_obj_set_style_text_color(left_arrow_down, lv_color_make(175, 165, 200), LV_PART_MAIN);
-    lv_obj_set_style_text_font(left_arrow_down, &lv_font_montserrat_20, LV_PART_MAIN);
-    lv_obj_set_pos(left_arrow_down, 153, 355);
+    drone_left_arrow_down = lv_label_create(lv_scr_act());
+    lv_label_set_text(drone_left_arrow_down, LV_SYMBOL_DOWN);
+    lv_obj_set_style_text_color(drone_left_arrow_down, lv_color_make(175, 165, 200), LV_PART_MAIN);
+    lv_obj_set_style_text_font(drone_left_arrow_down, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_set_pos(drone_left_arrow_down, 153, 355);
 
-    lv_obj_t *left_arrow_left = lv_label_create(lv_scr_act());
-    lv_label_set_text(left_arrow_left, LV_SYMBOL_LEFT);
-    lv_obj_set_style_text_color(left_arrow_left, lv_color_make(175, 165, 200), LV_PART_MAIN);
-    lv_obj_set_style_text_font(left_arrow_left, &lv_font_montserrat_20, LV_PART_MAIN);
-    lv_obj_set_pos(left_arrow_left, 46, 257);
+    drone_left_arrow_left = lv_label_create(lv_scr_act());
+    lv_label_set_text(drone_left_arrow_left, LV_SYMBOL_LEFT);
+    lv_obj_set_style_text_color(drone_left_arrow_left, lv_color_make(175, 165, 200), LV_PART_MAIN);
+    lv_obj_set_style_text_font(drone_left_arrow_left, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_set_pos(drone_left_arrow_left, 46, 257);
 
-    lv_obj_t *left_arrow_right = lv_label_create(lv_scr_act());
-    lv_label_set_text(left_arrow_right, LV_SYMBOL_RIGHT);
-    lv_obj_set_style_text_color(left_arrow_right, lv_color_make(175, 165, 200), LV_PART_MAIN);
-    lv_obj_set_style_text_font(left_arrow_right, &lv_font_montserrat_20, LV_PART_MAIN);
-    lv_obj_set_pos(left_arrow_right, 256, 257);
+    drone_left_arrow_right = lv_label_create(lv_scr_act());
+    lv_label_set_text(drone_left_arrow_right, LV_SYMBOL_RIGHT);
+    lv_obj_set_style_text_color(drone_left_arrow_right, lv_color_make(175, 165, 200), LV_PART_MAIN);
+    lv_obj_set_style_text_font(drone_left_arrow_right, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_set_pos(drone_left_arrow_right, 256, 257);
 
-    lv_obj_t *right_arrow_up = lv_label_create(lv_scr_act());
-    lv_label_set_text(right_arrow_up, LV_SYMBOL_UP);
-    lv_obj_set_style_text_color(right_arrow_up, lv_color_make(175, 165, 200), LV_PART_MAIN);
-    lv_obj_set_style_text_font(right_arrow_up, &lv_font_montserrat_20, LV_PART_MAIN);
-    lv_obj_set_pos(right_arrow_up, 427, 158);
+    drone_right_arrow_up = lv_label_create(lv_scr_act());
+    lv_label_set_text(drone_right_arrow_up, LV_SYMBOL_UP);
+    lv_obj_set_style_text_color(drone_right_arrow_up, lv_color_make(175, 165, 200), LV_PART_MAIN);
+    lv_obj_set_style_text_font(drone_right_arrow_up, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_set_pos(drone_right_arrow_up, 427, 158);
 
-    lv_obj_t *right_arrow_down = lv_label_create(lv_scr_act());
-    lv_label_set_text(right_arrow_down, LV_SYMBOL_DOWN);
-    lv_obj_set_style_text_color(right_arrow_down, lv_color_make(175, 165, 200), LV_PART_MAIN);
-    lv_obj_set_style_text_font(right_arrow_down, &lv_font_montserrat_20, LV_PART_MAIN);
-    lv_obj_set_pos(right_arrow_down, 427, 355);
+    drone_right_arrow_down = lv_label_create(lv_scr_act());
+    lv_label_set_text(drone_right_arrow_down, LV_SYMBOL_DOWN);
+    lv_obj_set_style_text_color(drone_right_arrow_down, lv_color_make(175, 165, 200), LV_PART_MAIN);
+    lv_obj_set_style_text_font(drone_right_arrow_down, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_set_pos(drone_right_arrow_down, 427, 355);
 
-    lv_obj_t *right_arrow_left = lv_label_create(lv_scr_act());
-    lv_label_set_text(right_arrow_left, LV_SYMBOL_LEFT);
-    lv_obj_set_style_text_color(right_arrow_left, lv_color_make(175, 165, 200), LV_PART_MAIN);
-    lv_obj_set_style_text_font(right_arrow_left, &lv_font_montserrat_20, LV_PART_MAIN);
-    lv_obj_set_pos(right_arrow_left, 320, 257);
+    drone_right_arrow_left = lv_label_create(lv_scr_act());
+    lv_label_set_text(drone_right_arrow_left, LV_SYMBOL_LEFT);
+    lv_obj_set_style_text_color(drone_right_arrow_left, lv_color_make(175, 165, 200), LV_PART_MAIN);
+    lv_obj_set_style_text_font(drone_right_arrow_left, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_set_pos(drone_right_arrow_left, 320, 257);
 
-    lv_obj_t *right_arrow_right = lv_label_create(lv_scr_act());
-    lv_label_set_text(right_arrow_right, LV_SYMBOL_RIGHT);
-    lv_obj_set_style_text_color(right_arrow_right, lv_color_make(175, 165, 200), LV_PART_MAIN);
-    lv_obj_set_style_text_font(right_arrow_right, &lv_font_montserrat_20, LV_PART_MAIN);
-    lv_obj_set_pos(right_arrow_right, 530, 257);
+    drone_right_arrow_right = lv_label_create(lv_scr_act());
+    lv_label_set_text(drone_right_arrow_right, LV_SYMBOL_RIGHT);
+    lv_obj_set_style_text_color(drone_right_arrow_right, lv_color_make(175, 165, 200), LV_PART_MAIN);
+    lv_obj_set_style_text_font(drone_right_arrow_right, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_set_pos(drone_right_arrow_right, 530, 257);
 
     drone_center_line = lv_obj_create(lv_scr_act());
     lv_obj_remove_style_all(drone_center_line);
-    lv_obj_set_size(drone_center_line, 2, 222);
-    lv_obj_set_pos(drone_center_line, 299, 172);
+    lv_obj_set_size(drone_center_line, 2, 160);
+    lv_obj_set_pos(drone_center_line, 299, 200);
     lv_obj_set_style_bg_opa(drone_center_line, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_border_side(drone_center_line, LV_BORDER_SIDE_LEFT, LV_PART_MAIN);
     lv_obj_set_style_border_width(drone_center_line, 2, LV_PART_MAIN);
@@ -3732,7 +3947,7 @@ void app_main(void)
     lv_obj_set_style_text_letter_space(drone_stick_controls_label, 1, LV_PART_MAIN);
     lv_obj_set_style_text_align(drone_stick_controls_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
     lv_obj_set_width(drone_stick_controls_label, LCD_H_RES);
-    lv_obj_set_pos(drone_stick_controls_label, 0, 136);
+    lv_obj_set_pos(drone_stick_controls_label, 0, 144);
 
     drone_left_stick_label = lv_label_create(lv_scr_act());
     lv_label_set_text(drone_left_stick_label, "LEFT STICK");
@@ -3789,7 +4004,7 @@ void app_main(void)
     drone_flowlapse_label = lv_label_create(lv_scr_act());
     lv_label_set_text(drone_flowlapse_label, flowlapse_status_text);
     lv_obj_set_style_text_color(drone_flowlapse_label, lv_color_white(), LV_PART_MAIN);
-    lv_obj_set_style_text_font(drone_flowlapse_label, &lv_font_montserrat_48, LV_PART_MAIN);
+    lv_obj_set_style_text_font(drone_flowlapse_label, &lv_font_montserrat_28, LV_PART_MAIN);
     lv_obj_set_style_text_align(drone_flowlapse_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
     lv_obj_set_width(drone_flowlapse_label, FLOWLAPSE_BAR_NORMAL_W);
     lv_obj_set_pos(drone_flowlapse_label, FLOWLAPSE_BAR_NORMAL_X, FLOWLAPSE_LABEL_NORMAL_Y);
@@ -3809,8 +4024,149 @@ void app_main(void)
     lv_obj_set_style_text_font(drone_flowlapse_waypoint_label, &lv_font_montserrat_48, LV_PART_MAIN);
     lv_obj_set_style_text_align(drone_flowlapse_waypoint_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
     lv_obj_set_size(drone_flowlapse_waypoint_label, 160, 70);
-    lv_obj_set_pos(drone_flowlapse_waypoint_label, 250, 368);
+    lv_obj_set_pos(drone_flowlapse_waypoint_label, 220, 340);
     lv_obj_add_flag(drone_flowlapse_waypoint_label, LV_OBJ_FLAG_HIDDEN);
+
+    /* ================================================================
+     * Flowlapse status card — reference-style full-screen panel
+     * Screen: 600 x 450.  Card: x=20 y=58 w=560 h=265
+     * ================================================================ */
+
+    /* Background card */
+    flowlapse_status_card = lv_obj_create(lv_scr_act());
+    lv_obj_remove_style_all(flowlapse_status_card);
+    lv_obj_set_size(flowlapse_status_card, 560, 265);
+    lv_obj_set_pos(flowlapse_status_card, 20, 58);
+    lv_obj_set_style_radius(flowlapse_status_card, 10, LV_PART_MAIN);
+    lv_obj_set_style_border_width(flowlapse_status_card, 2, LV_PART_MAIN);
+    lv_obj_set_style_border_color(flowlapse_status_card, lv_color_make(0, 200, 200), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(flowlapse_status_card, lv_color_make(8, 10, 22), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(flowlapse_status_card, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_add_flag(flowlapse_status_card, LV_OBJ_FLAG_HIDDEN);
+
+    /* Icon circle — centred on x=300, y=73 */
+    fl_icon_circle = lv_obj_create(lv_scr_act());
+    lv_obj_remove_style_all(fl_icon_circle);
+    lv_obj_set_size(fl_icon_circle, 54, 54);
+    lv_obj_set_pos(fl_icon_circle, (LCD_H_RES - 54) / 2, 73);
+    lv_obj_set_style_radius(fl_icon_circle, 27, LV_PART_MAIN);
+    lv_obj_set_style_border_width(fl_icon_circle, 2, LV_PART_MAIN);
+    lv_obj_set_style_border_color(fl_icon_circle, lv_color_make(0, 200, 200), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(fl_icon_circle, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_add_flag(fl_icon_circle, LV_OBJ_FLAG_HIDDEN);
+
+    /* Icon symbol inside circle (vertically centred: circle y=73, h=54, sym h≈20 → y=90) */
+    fl_icon_label = lv_label_create(lv_scr_act());
+    lv_label_set_text(fl_icon_label, LV_SYMBOL_OK);
+    lv_obj_set_style_text_color(fl_icon_label, lv_color_make(0, 200, 200), LV_PART_MAIN);
+    lv_obj_set_style_text_font(fl_icon_label, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_set_style_text_align(fl_icon_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    lv_obj_set_size(fl_icon_label, 54, LV_SIZE_CONTENT);
+    lv_obj_set_pos(fl_icon_label, (LCD_H_RES - 54) / 2, 90);
+    lv_obj_add_flag(fl_icon_label, LV_OBJ_FLAG_HIDDEN);
+
+    /* Main status text */
+    fl_status_text_label = lv_label_create(lv_scr_act());
+    lv_label_set_text(fl_status_text_label, "");
+    lv_obj_set_style_text_color(fl_status_text_label, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_text_font(fl_status_text_label, &lv_font_montserrat_28, LV_PART_MAIN);
+    lv_obj_set_style_text_align(fl_status_text_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    lv_obj_set_size(fl_status_text_label, 560, LV_SIZE_CONTENT);
+    lv_obj_set_pos(fl_status_text_label, 20, 140);
+    lv_obj_add_flag(fl_status_text_label, LV_OBJ_FLAG_HIDDEN);
+
+    /* Waypoint number "3/8" in gold (right-aligned, ends at screen centre) */
+    fl_wp_num_label = lv_label_create(lv_scr_act());
+    lv_label_set_text(fl_wp_num_label, "0/0");
+    lv_obj_set_style_text_color(fl_wp_num_label, lv_color_make(240, 180, 0), LV_PART_MAIN);
+    lv_obj_set_style_text_font(fl_wp_num_label, &lv_font_montserrat_48, LV_PART_MAIN);
+    lv_obj_set_style_text_align(fl_wp_num_label, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
+    lv_obj_set_size(fl_wp_num_label, 150, LV_SIZE_CONTENT);
+    lv_obj_set_pos(fl_wp_num_label, 140, 190);
+    lv_obj_add_flag(fl_wp_num_label, LV_OBJ_FLAG_HIDDEN);
+
+    /* "WAYPOINTS" word label — sits to the right of the number, vertically centred */
+    fl_wp_word_label = lv_label_create(lv_scr_act());
+    lv_label_set_text(fl_wp_word_label, "WAYPOINTS");
+    lv_obj_set_style_text_color(fl_wp_word_label, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_text_font(fl_wp_word_label, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_set_style_text_align(fl_wp_word_label, LV_TEXT_ALIGN_LEFT, LV_PART_MAIN);
+    lv_obj_set_size(fl_wp_word_label, 180, LV_SIZE_CONTENT);
+    lv_obj_set_pos(fl_wp_word_label, 298, 208);
+    lv_obj_add_flag(fl_wp_word_label, LV_OBJ_FLAG_HIDDEN);
+
+    /* Progress squares — 8 max, 46 x 20 px each, 8 px gap, centred at y=254 */
+    for (int i = 0; i < FL_WP_MAX_SQUARES; i++) {
+        fl_wp_squares[i] = lv_obj_create(lv_scr_act());
+        lv_obj_remove_style_all(fl_wp_squares[i]);
+        lv_obj_set_size(fl_wp_squares[i], 46, 20);
+        lv_obj_set_pos(fl_wp_squares[i], 88 + i * 54, 254);
+        lv_obj_set_style_radius(fl_wp_squares[i], 3, LV_PART_MAIN);
+        lv_obj_set_style_bg_color(fl_wp_squares[i], lv_color_make(35, 35, 40), LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(fl_wp_squares[i], LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_border_width(fl_wp_squares[i], 1, LV_PART_MAIN);
+        lv_obj_set_style_border_color(fl_wp_squares[i], lv_color_make(100, 100, 100), LV_PART_MAIN);
+        lv_obj_add_flag(fl_wp_squares[i], LV_OBJ_FLAG_HIDDEN);
+    }
+
+    /* Horizontal divider above prompt */
+    fl_divider_line = lv_obj_create(lv_scr_act());
+    lv_obj_remove_style_all(fl_divider_line);
+    lv_obj_set_size(fl_divider_line, 520, 1);
+    lv_obj_set_pos(fl_divider_line, 40, 340);
+    lv_obj_set_style_bg_color(fl_divider_line, lv_color_make(60, 60, 70), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(fl_divider_line, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_add_flag(fl_divider_line, LV_OBJ_FLAG_HIDDEN);
+
+    /* Prompt label */
+    fl_prompt_label = lv_label_create(lv_scr_act());
+    lv_label_set_text(fl_prompt_label, "");
+    lv_obj_set_style_text_color(fl_prompt_label, lv_color_make(170, 170, 170), LV_PART_MAIN);
+    lv_obj_set_style_text_font(fl_prompt_label, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_set_style_text_align(fl_prompt_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    lv_obj_set_size(fl_prompt_label, LCD_H_RES, LV_SIZE_CONTENT);
+    lv_obj_set_pos(fl_prompt_label, 0, 354);
+    lv_obj_add_flag(fl_prompt_label, LV_OBJ_FLAG_HIDDEN);
+
+    /* Decorative title lines (shown only when flowlapse is active) */
+    fl_title_line_left = lv_obj_create(lv_scr_act());
+    lv_obj_remove_style_all(fl_title_line_left);
+    lv_obj_set_size(fl_title_line_left, 150, 1);
+    lv_obj_set_pos(fl_title_line_left, 30, 23);
+    lv_obj_set_style_bg_color(fl_title_line_left, lv_color_make(80, 85, 95), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(fl_title_line_left, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_add_flag(fl_title_line_left, LV_OBJ_FLAG_HIDDEN);
+
+    fl_title_line_right = lv_obj_create(lv_scr_act());
+    lv_obj_remove_style_all(fl_title_line_right);
+    lv_obj_set_size(fl_title_line_right, 150, 1);
+    lv_obj_set_pos(fl_title_line_right, 420, 23);
+    lv_obj_set_style_bg_color(fl_title_line_right, lv_color_make(80, 85, 95), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(fl_title_line_right, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_add_flag(fl_title_line_right, LV_OBJ_FLAG_HIDDEN);
+
+    /* Capture progress bar — shown inside card during CAPTURE / PAUSED / ETA states */
+    /* Card: x=20, y=58, w=560, h=265 → bar at screen y=58+235=293, centred x=40 */
+    fl_capture_bar = lv_obj_create(lv_scr_act());
+    lv_obj_remove_style_all(fl_capture_bar);
+    lv_obj_set_size(fl_capture_bar, FL_CAPTURE_BAR_W, FL_CAPTURE_BAR_H);
+    lv_obj_set_pos(fl_capture_bar, (LCD_H_RES - FL_CAPTURE_BAR_W) / 2, 293);
+    lv_obj_set_style_radius(fl_capture_bar, 5, LV_PART_MAIN);
+    lv_obj_set_style_border_width(fl_capture_bar, 1, LV_PART_MAIN);
+    lv_obj_set_style_border_color(fl_capture_bar, lv_color_make(80, 85, 95), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(fl_capture_bar, lv_color_make(18, 18, 28), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(fl_capture_bar, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_add_flag(fl_capture_bar, LV_OBJ_FLAG_HIDDEN);
+
+    fl_capture_fill = lv_obj_create(fl_capture_bar);
+    lv_obj_remove_style_all(fl_capture_fill);
+    lv_obj_set_size(fl_capture_fill, 0, FL_CAPTURE_BAR_H - 6);
+    lv_obj_set_pos(fl_capture_fill, 3, 3);
+    lv_obj_set_style_radius(fl_capture_fill, 3, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(fl_capture_fill, lv_color_make(0, 130, 180), LV_PART_MAIN);
+    lv_obj_set_style_bg_grad_color(fl_capture_fill, lv_color_make(0, 210, 210), LV_PART_MAIN);
+    lv_obj_set_style_bg_grad_dir(fl_capture_fill, LV_GRAD_DIR_HOR, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(fl_capture_fill, LV_OPA_COVER, LV_PART_MAIN);
 
     set_drone_mode_visible(false);
 
